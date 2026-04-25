@@ -2,7 +2,7 @@ template-repo: https://github.com/bn-l/claude-template
 template-sha: b7bcbe9dca1921203b5fed3ac769e46fefa45700
 original-command:
   languages:
-  - rust
+  - swift
   hooks: []
   mcp: []
   commands: []
@@ -31,5 +31,6 @@ files:
   .editorconfig: 920095057fbf951368af22f3948f51d4138ed73e777b2f2896d424f7946840f8
   .mcp.json: 486c7a9ae58181ce560828db2a3ee6451e7782837550435545aa4f4d53b7d51a
   AGENTS.md: b603b645b4bb152fdf11c6c86b0258bc8e44e5dddf7cd4e21bbfc39e54eb4d51
-  CLAUDE.md: 4d82f9c6837f7ea876fa4e3d01f5595e889eb0ca0732f11a163fba27faf4057d
-  GUIDE_modern_rust_and_libs.md: f7ace093a6ece1530ee30739ddf6777c722b265e72dfb5bfef8485be425f6076
+  CLAUDE.md: 3b6711fcdbf720009f2ea2ac14dd43dabc32e884210f868f0f768e67e16bb1d7
+  GUIDE_modern_swift.md: ecb5a3bd5f34a19868df92abdfcb0f2d5ddd461302801eb78835299c07f07c46
+  GUIDE_swift_testing.md: 0269fa45039f6b6e5223af3cc1e7c8925a0e49174b37a44a769c65c28fadb2ef
