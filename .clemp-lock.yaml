@@ -1,0 +1,35 @@
+template-repo: https://github.com/bn-l/claude-template
+template-sha: b7bcbe9dca1921203b5fed3ac769e46fefa45700
+original-command:
+  languages:
+  - rust
+  hooks: []
+  mcp: []
+  commands: []
+  githooks: []
+  drop-mcp: []
+  drop-hooks: []
+  clarg: null
+resolved:
+  mcp:
+  - context7
+  - devlogger
+  - textbelt
+  hooks:
+  - session-cleanup
+  - sound
+files:
+  .claude/clarg-default.yaml: 4fb3caeafbf2bbc8172b9c88a5acf47c940ab0b5fde2ed00251868a463cff8a0
+  .claude/commands/commit.md: 3f40978252881e912e99ded0a1f86e4a49044dc29a73350099418d1556e1e930
+  .claude/commands/grain-of-salt.md: 9a9e609ed9f8bafae408fafb94d39c812b574858315b44fd662f0b7c23c8d350
+  .claude/commands/hb-release.md: bcde35682509288d8f61e183b8c5b83e3229ef4d0c7b060882f9e7cbe3c8bfe3
+  .claude/commands/isolated.md: 6be3e6eebf6e0ad0b038e51fe7d8307b78ff24c9c4e5c7662367956a2b4301bc
+  .claude/commands/leads-based-research.md: a7cbdca1bb7903367b94030065465f2d73cc5213fde20d3e613847e9cabf47c1
+  .claude/commands/maintain-repomap.md: 6f64a744ef193e6a4f728152c853ad0a35bf7b956b7cba4d253121e3d740f4d9
+  .claude/settings.local.json: ec8495e1bc08897199661330cc6e8df5dec1c5d59a8b6484c2dd2ccb5b83ccda
+  .claude/skills/devlogger/SKILL.md: 2a0a937398e8ec7de9486472da7c9ce5b1c77afce09ee73c0acaeb8b5a144fbe
+  .editorconfig: 920095057fbf951368af22f3948f51d4138ed73e777b2f2896d424f7946840f8
+  .mcp.json: 486c7a9ae58181ce560828db2a3ee6451e7782837550435545aa4f4d53b7d51a
+  AGENTS.md: b603b645b4bb152fdf11c6c86b0258bc8e44e5dddf7cd4e21bbfc39e54eb4d51
+  CLAUDE.md: 4d82f9c6837f7ea876fa4e3d01f5595e889eb0ca0732f11a163fba27faf4057d
+  GUIDE_modern_rust_and_libs.md: f7ace093a6ece1530ee30739ddf6777c722b265e72dfb5bfef8485be425f6076
