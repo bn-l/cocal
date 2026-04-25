@@ -1,15 +1,135 @@
+# =============================================================================
+# Credential leak prevention
+# =============================================================================
+# This project handles ChatGPT OAuth refresh tokens. Anything below could leak
+# them if accidentally committed. Add liberally; never weaken.
 
-# Claude related
+# Codex auth files (the live target the switcher reads/writes). Banned anywhere
+# in the tree — fixtures must use a different filename and ideally be built in
+# test code rather than checked in.
+**/auth.json
+**/auth.json.bak
+**/auth.json.bak.*
+**/auth.json.tmp
+**/.codex/
+**/codex-switcher/profiles/
+**/active-slot.json
+
+# Common credential-bearing file shapes
 **/.env
-src.md
+**/.env.*
+!**/.env.example
+**/.envrc
+**/.netrc
+**/secrets.json
+**/secrets.yaml
+**/secrets.yml
+**/credentials.json
+**/credentials
+**/client_secret*.json
+**/service-account*.json
+**/*.token
+**/*.refresh_token
+**/*.access_token
+**/*.bearer
+**/.aws/
+**/.config/gh/
+
+# Keychain exports / signing material / OAuth client packages
+**/*.keychain
+**/*.keychain-db
+**/*.p12
+**/*.pfx
+**/*.cer
+**/*.mobileprovision
+**/*.provisionprofile
+**/AuthKey_*.p8
+
+# Anything API-key shaped that humans put in random files
+**/apikey*
+**/api_key*
+**/api-key*
+**/*.apikey
+**/openai_*
+**/oauth_*
+
+# =============================================================================
+# Local agent / editor state (already private; reinforced here)
+# =============================================================================
 **/CLAUDE.md
 **/.claude
 **/AGENTS.md
 **/.agent/
+**/.cursor
+**/.aider*
+**/.continue
+**/.windsurf
+**/.zed
+.mcp.json
+DEVLOG/
+src.md
 REPOMAP.md
 CODEGUIDE.md
-**/.cursor
-.mcp.json
+
+# =============================================================================
+# Swift / Xcode build artifacts
+# =============================================================================
+.build/
+.swiftpm/
+Packages/
+Package.resolved
+build/
+DerivedData/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+xcuserdata/
+*.xcuserstate
+*.hmap
+*.ipa
+*.app.dSYM.zip
+*.dSYM.zip
+*.dSYM
+*.xcresult
+*.crash
+*.crashpad
+
+# DMG / release artifacts
+*.dmg
+*.pkg
+notarization-output/
+
+# =============================================================================
+# OS / IDE / generic noise
+# =============================================================================
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+.Spotlight-V100
+.Trashes
+.fseventsd
+.idea/
+*.swp
+*.swo
+*~
+
+# =============================================================================
+# Logs / temp / coverage
+# =============================================================================
+*.log
+log/
+logs/
+tmp/
+.tmp/
+coverage/
+*.gcov
+*.gcda
+*.gcno
+
+# =============================================================================
+# Leftovers from Rust scaffolding (kept for safety in case something appears)
+# =============================================================================
 target/
 **/*.rs.bk
 *.pdb
