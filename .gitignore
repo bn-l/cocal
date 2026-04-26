@@ -65,6 +65,7 @@
 **/.continue
 **/.windsurf
 **/.zed
+**/.vscode
 .mcp.json
 DEVLOG/
 src.md
