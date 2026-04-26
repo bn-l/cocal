@@ -10,7 +10,7 @@ public struct AuthPathResolver: Sendable {
 
     public init(
         environment: [String: String] = ProcessInfo.processInfo.environment,
-        homeDirectory: URL = URL(fileURLWithPath: NSHomeDirectory())
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
     ) {
         self.environment = environment
         self.homeDirectory = homeDirectory
@@ -19,7 +19,7 @@ public struct AuthPathResolver: Sendable {
     /// The single canonical path. Always defined — file may or may not exist.
     public var canonicalPath: URL {
         if let codexHome = environment["CODEX_HOME"], !codexHome.isEmpty {
-            return URL(fileURLWithPath: codexHome).appendingPathComponent("auth.json")
+            return URL(filePath: codexHome).appendingPathComponent("auth.json")
         }
         return homeDirectory.appendingPathComponent(".codex/auth.json")
     }

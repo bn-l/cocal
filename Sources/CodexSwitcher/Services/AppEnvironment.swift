@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import OSLog
 
 private let logger = Logger(subsystem: "com.bn-l.codex-switcher", category: "AppEnvironment")
@@ -15,8 +16,7 @@ public final class AppEnvironment: @unchecked Sendable {
     public let switcher: Switcher
     public let resolver: AuthPathResolver
 
-    private let actorQueue = DispatchQueue(label: "com.bn-l.codex-switcher.AppEnvironment.actors")
-    private var actorsByProfileID: [String: PerProfile] = [:]
+    private let actors = Mutex<[String: PerProfile]>([:])
 
     public init(
         profileStore: ProfileStore = ProfileStore(rootDirectory: ProfileStore.defaultLocation()),
@@ -43,8 +43,8 @@ public final class AppEnvironment: @unchecked Sendable {
     /// first access. Per PLAN.md §2.3, exactly one actor instance per profile id is
     /// the foundation of refresh-token rotation safety.
     public func perProfile(for profile: Profile) -> PerProfile {
-        actorQueue.sync {
-            if let existing = actorsByProfileID[profile.id] { return existing }
+        actors.withLock { dict in
+            if let existing = dict[profile.id] { return existing }
             let snapshotURL = profileStore.snapshotURL(for: profile.id)
             let actor = PerProfile(
                 profileID: profile.id,
@@ -52,22 +52,29 @@ public final class AppEnvironment: @unchecked Sendable {
                 backend: backend,
                 refresher: refresher
             )
-            actorsByProfileID[profile.id] = actor
+            dict[profile.id] = actor
             return actor
         }
     }
 
     /// Resolve `(profile, actor)` for the currently-active slot, or `nil` if no
     /// profile has been imported / activated yet.
+    ///
+    /// If `activeID` is set but no profile matches (i.e. the active profile was
+    /// deleted but the slot pointer wasn't cleared), this returns `nil` rather
+    /// than falling back to an arbitrary other profile. The live `auth.json`
+    /// may still belong to the deleted account; using a different profile as
+    /// the "outgoing" side of a swap would capture stale credentials into the
+    /// wrong slot.
     public func activeProfileAndActor() -> (Profile, PerProfile)? {
-        let activeID = slotStore.loadActiveID()
         let profiles = profileStore.loadAll()
         let active: Profile?
-        if let id = activeID, let match = profiles.first(where: { $0.id == id }) {
-            active = match
+        if let id = slotStore.loadActiveID() {
+            active = profiles.first(where: { $0.id == id })
         } else {
-            // No slot set yet but profiles exist — fall through with the first one
-            // as a sane default; the slot will be persisted on the first switch.
+            // No slot set yet — first import flow. Falling back to `profiles.first`
+            // here is safe because no profile has ever been "active" so there's no
+            // mismatched-credentials risk on the live auth path.
             active = profiles.first
         }
         guard let profile = active else { return nil }

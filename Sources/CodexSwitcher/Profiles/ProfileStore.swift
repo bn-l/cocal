@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import OSLog
 
 private let logger = Logger(subsystem: "com.bn-l.codex-switcher", category: "ProfileStore")
@@ -15,7 +16,7 @@ private let logger = Logger(subsystem: "com.bn-l.codex-switcher", category: "Pro
 /// from racing with concurrent warms or switches.
 public final class ProfileStore: @unchecked Sendable {
     public let rootDirectory: URL
-    private let queue = DispatchQueue(label: "com.bn-l.codex-switcher.ProfileStore")
+    private let lock = Mutex<Void>(())
 
     public init(rootDirectory: URL) {
         self.rootDirectory = rootDirectory
@@ -25,7 +26,7 @@ public final class ProfileStore: @unchecked Sendable {
     /// Convenience: the canonical store under `~/Library/Application Support/codex-switcher/profiles/`.
     public static func defaultLocation() -> URL {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
         return appSupport.appendingPathComponent("codex-switcher/profiles", isDirectory: true)
     }
 
@@ -43,7 +44,7 @@ public final class ProfileStore: @unchecked Sendable {
     }
 
     public func loadAll() -> [Profile] {
-        queue.sync { _loadAll() }
+        lock.withLock { _ in _loadAll() }
     }
 
     public func loadByDedupKey(_ key: String) -> Profile? {
@@ -52,7 +53,7 @@ public final class ProfileStore: @unchecked Sendable {
 
     /// Persist a new profile and its initial `auth.json` snapshot.
     public func insert(_ profile: Profile, snapshot: AuthJSON) throws {
-        try queue.sync {
+        try lock.withLock { _ in
             let dir = directory(for: profile.id)
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             try Snapshotter.write(snapshot, to: snapshotURL(for: profile.id))
@@ -61,11 +62,11 @@ public final class ProfileStore: @unchecked Sendable {
     }
 
     public func updateMetadata(_ profile: Profile) throws {
-        try queue.sync { try writeMetadata(profile) }
+        try lock.withLock { _ in try writeMetadata(profile) }
     }
 
     public func remove(_ profileID: String) throws {
-        try queue.sync {
+        try lock.withLock { _ in
             let dir = directory(for: profileID)
             if FileManager.default.fileExists(atPath: dir.path) {
                 try FileManager.default.removeItem(at: dir)
@@ -73,7 +74,7 @@ public final class ProfileStore: @unchecked Sendable {
         }
     }
 
-    // MARK: - Private (run inside queue)
+    // MARK: - Private (run inside lock)
 
     private func _loadAll() -> [Profile] {
         let fm = FileManager.default

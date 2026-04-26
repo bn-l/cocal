@@ -63,7 +63,7 @@ public final class TokenRefresher: Sendable {
     /// Maps an OAuth error response onto the `RefreshTokenFailedReason` enum from
     /// `codex-rs/protocol/src/auth.rs` (PLAN.md §1.3). The OAuth server returns a
     /// JSON body shaped like `{"error": "refresh_token_expired"}`.
-    static func classifyFailure(status: Int, body: String) -> RefreshFailureReason {
+    static func classifyFailure(status _: Int, body: String) -> RefreshFailureReason {
         let lowered = body.lowercased()
         if lowered.contains("refresh_token_expired") { return .expired }
         if lowered.contains("refresh_token_reused") { return .exhausted }
@@ -72,8 +72,6 @@ public final class TokenRefresher: Sendable {
             // logged out or the token was revoked.
             return .revoked
         }
-        // Server gave us an opaque 4xx/5xx — treat as transient/unknown.
-        _ = status
         return .other
     }
 }

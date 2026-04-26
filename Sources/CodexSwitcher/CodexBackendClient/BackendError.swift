@@ -5,10 +5,6 @@ public enum BackendError: Error, Sendable, Equatable {
     /// The HTTP status was non-2xx; carries the status code and any body string for diagnostics.
     case http(status: Int, body: String?)
 
-    /// Response decoded but a required field was missing. Used sparingly because almost
-    /// every field is `Optional` per the M2 decision-gate strategy in PLAN.md §6.
-    case missingField(String)
-
     /// JSON decoding failed entirely (malformed body).
     case decoding(String)
 

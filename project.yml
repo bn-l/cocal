@@ -24,7 +24,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.bn-l.codex-switcher
         PRODUCT_NAME: CodexSwitcher
-        SWIFT_VERSION: "6.0"
+        SWIFT_VERSION: "6.2"
         MACOSX_DEPLOYMENT_TARGET: "15.0"
         CODE_SIGN_ENTITLEMENTS: CodexSwitcher.entitlements
         INFOPLIST_FILE: Info.plist
@@ -40,7 +40,7 @@ targets:
       - path: Tests/CodexSwitcherTests
     settings:
       base:
-        SWIFT_VERSION: "6.0"
+        SWIFT_VERSION: "6.2"
         MACOSX_DEPLOYMENT_TARGET: "15.0"
         SWIFT_STRICT_CONCURRENCY: complete
         GENERATE_INFOPLIST_FILE: YES
