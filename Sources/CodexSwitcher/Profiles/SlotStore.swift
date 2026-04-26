@@ -22,8 +22,10 @@ public final class SlotStore: @unchecked Sendable {
 
     public func loadActiveID() -> String? {
         queue.sync {
-            guard let data = try? Data(contentsOf: url),
-                  let payload = try? JSONDecoder().decode(Payload.self, from: data) else { return nil }
+            guard let data = try? Data(contentsOf: url) else { return nil }
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            guard let payload = try? decoder.decode(Payload.self, from: data) else { return nil }
             return payload.activeProfileID
         }
     }
