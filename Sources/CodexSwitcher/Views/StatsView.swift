@@ -8,6 +8,11 @@ struct StatsView: View {
     private static let hoursColor = Color.indigo
     private static let weeklyColor = Color.teal
 
+    /// Max height of the scrolling content. Bumped up from the original 260 —
+    /// the previous value clipped Weekly Utilization on any account with
+    /// multi-week history, hiding the most useful section in the popover.
+    static let scrollMaxHeight: CGFloat = 420
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
@@ -33,7 +38,7 @@ struct StatsView: View {
                     }
                 }
             }
-            .frame(maxHeight: 260)
+            .frame(maxHeight: Self.scrollMaxHeight)
         }
     }
 

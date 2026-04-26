@@ -13,6 +13,16 @@ struct CodexSwitcherApp: App {
         Migration.runIfNeeded()
         let monitor = UsageMonitor()
         monitor.environment = AppEnvironment.shared
+        // Prime the observable profile list before any view is constructed.
+        // The popover uses `MenuBarExtra(.window)`, which keeps the SwiftUI
+        // tree alive across opens — if we wait for `ProfileListView.init` or
+        // `.task` to do this, the very first body evaluation can read an
+        // empty `monitor.profiles` and never refresh on subsequent renders
+        // (the user reported missing profile rows even though `poll()` was
+        // logging the imported profile). Loading here is synchronous and
+        // small: just a directory scan + a JSON decode per profile.
+        monitor.reloadProfiles()
+        logger.info("CodexSwitcherApp init: primed profiles count=\(monitor.profiles.count, privacy: .public)")
         _monitor = State(initialValue: monitor)
     }
 

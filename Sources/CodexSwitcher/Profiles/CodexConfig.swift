@@ -4,11 +4,15 @@ import OSLog
 private let logger = Logger(subsystem: "com.bn-l.codex-switcher", category: "CodexConfig")
 
 /// Classifies and (when asked) rewrites `~/.codex/config.toml`'s
-/// `cli_auth_credentials_store` setting (PLAN.md §2.3 "Keyring vs file storage").
+/// `cli_auth_credentials_store` setting.
 ///
-/// On macOS, `auto` and an absent setting both resolve to keyring (since
-/// Security.framework is always available), so we treat them all as needing
-/// the file-mode prompt before swaps can work.
+/// Per Codex's own source (`codex-rs/config/src/types.rs`) the enum's
+/// `#[default]` is `File` — so when the key is **absent**, Codex resolves to
+/// file mode at `$CODEX_HOME/auth.json`. We therefore treat `.unset` as
+/// equivalent to `.file` for the purposes of the keyring prompt. Only an
+/// explicit `keyring` (always keyring) or `auto` (keyring-preferred, falls
+/// back to file when keyring write fails — but may evict our file the moment
+/// keyring writes start succeeding) needs the prompt.
 public struct CodexConfig: Sendable {
     public enum StorageMode: Equatable, Sendable {
         case file
@@ -16,12 +20,14 @@ public struct CodexConfig: Sendable {
         case auto
         case unset
 
-        /// True when swaps cannot reliably affect a running Codex CLI / Codex.app
-        /// because credentials live in the Keychain rather than `~/.codex/auth.json`.
+        /// True when swaps cannot reliably affect a running Codex CLI / Codex.app /
+        /// IDE extension because credentials may live in the Keychain rather than
+        /// `~/.codex/auth.json`. `unset` returns `false` because Codex's documented
+        /// default is `file`.
         public var needsFileMode: Bool {
             switch self {
-            case .file: return false
-            case .keyring, .auto, .unset: return true
+            case .file, .unset: return false
+            case .keyring, .auto: return true
             }
         }
     }
@@ -29,9 +35,9 @@ public struct CodexConfig: Sendable {
     public let configURL: URL
 
     public init(environment: [String: String] = ProcessInfo.processInfo.environment,
-                homeDirectory: URL = URL(fileURLWithPath: NSHomeDirectory())) {
+                homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser) {
         if let codexHome = environment["CODEX_HOME"], !codexHome.isEmpty {
-            self.configURL = URL(fileURLWithPath: codexHome).appendingPathComponent("config.toml")
+            self.configURL = URL(filePath: codexHome).appendingPathComponent("config.toml")
         } else {
             self.configURL = homeDirectory.appendingPathComponent(".codex/config.toml")
         }

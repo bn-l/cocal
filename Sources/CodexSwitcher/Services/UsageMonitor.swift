@@ -43,6 +43,33 @@ final class UsageMonitor {
         }
     }
     var needsRestart: Bool = false
+    /// `true` once a poll has confirmed there are no imported Codex profiles.
+    /// Drives the popover's first-run empty state — the "Unable to fetch usage
+    /// data" + "View errors" path was buried for a clean-slate user.
+    var noProfileImported: Bool = false
+    /// Reactive copy of the on-disk profile list. `ProfileListView` reads this
+    /// directly (no local `@State`) so a render that postdates an import sees
+    /// the new profile — local view state would otherwise be locked in by
+    /// `MenuBarExtra(.window)` keeping the SwiftUI tree alive across opens.
+    var profiles: [Profile] = []
+    /// Active profile id from the slot store; mirrored here for the same
+    /// reason as `profiles`.
+    var activeID: String?
+    /// Transient status message surfaced after an import attempt. Auto-clears
+    /// after `showImportStatus(_:autoDismissAfter:)` so it doesn't linger
+    /// forever in the popover.
+    var importStatus: ImportStatus?
+    @ObservationIgnored private var importStatusDismissTask: Task<Void, Never>?
+
+    struct ImportStatus: Equatable, Sendable {
+        let message: String
+        let isError: Bool
+
+        init(message: String, isError: Bool) {
+            self.message = message
+            self.isError = isError
+        }
+    }
     private var napActivity: (any NSObjectProtocol)?
 
     /// Injected by the app entry point; tests construct their own `UsageMonitor`
@@ -73,6 +100,33 @@ final class UsageMonitor {
         await poll()
     }
 
+    /// Surface a status message after an import. Auto-dismisses after the
+    /// given delay so the popover doesn't accumulate stale lines. A second
+    /// call replaces the message and resets the timer.
+    func showImportStatus(_ status: ImportStatus, autoDismissAfter: TimeInterval = 4.0) {
+        importStatusDismissTask?.cancel()
+        importStatus = status
+        let captured = status
+        importStatusDismissTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(autoDismissAfter))
+            guard !Task.isCancelled, let self else { return }
+            if self.importStatus == captured { self.importStatus = nil }
+        }
+    }
+
+    /// Reload the observable profile list from the environment's stores. Safe
+    /// to call from any UI flow that knows the underlying state changed (e.g.
+    /// after an import or remove). Each call also re-fires
+    /// `_ProfileListReloadObserver.didReload` so tests that rely on the
+    /// existing seam continue to see real production data.
+    func reloadProfiles() {
+        let env = environment ?? AppEnvironment.shared
+        let loaded = env.profileStore.loadAll()
+        profiles = loaded
+        activeID = env.slotStore.loadActiveID()
+        _ProfileListReloadObserver.didReload?(loaded)
+    }
+
     func startPolling() async {
         logger.info("startPolling: pollInterval=\(self.config.pollIntervalSeconds, privacy: .public)s")
         napActivity = ProcessInfo.processInfo.beginActivity(options: .background, reason: "Periodic API polling")
@@ -83,6 +137,13 @@ final class UsageMonitor {
         await poll()
 
         logger.info("Entering polling loop: interval=\(self.config.pollIntervalSeconds, privacy: .public)s")
+        defer {
+            if let activity = napActivity {
+                ProcessInfo.processInfo.endActivity(activity)
+                napActivity = nil
+                logger.info("Released background activity token")
+            }
+        }
         while !Task.isCancelled {
             try? await Task.sleep(for: .seconds(config.pollIntervalSeconds))
             logger.debug("Poll timer fired")
@@ -157,11 +218,17 @@ final class UsageMonitor {
         }
 
         let env = environment ?? AppEnvironment.shared
+        // Refresh the observable profile list every poll so popover renders
+        // always reflect the current store, even if the import happened on a
+        // different code path or in another process instance.
+        reloadProfiles()
         guard let (profile, perProfile) = env.activeProfileAndActor() else {
+            noProfileImported = true
             appendError("No Codex profile imported. Click Import credentials, or run `codex login` first.")
             logger.warning("No active profile — skipping poll")
             return
         }
+        noProfileImported = false
 
         do {
             let response = try await perProfile.usage()
@@ -179,6 +246,21 @@ final class UsageMonitor {
                 isSessionActive: primary != nil && sessionMinsLeft > 0
             )
             logger.info("Codex poll ok: profile=\(profile.label, privacy: .public) primary%=\(primary?.usedPercent ?? -1, privacy: .public) secondary%=\(secondary?.usedPercent ?? -1, privacy: .public)")
+            // Persist the active profile's usage percentages so the profile
+            // row shows real numbers instead of "—". The Warmer already does
+            // this for inactive profiles; the active profile's data flows
+            // through processResponse → metrics but was never written back
+            // to the Profile struct, leaving primaryUsedPercent/
+            // secondaryUsedPercent nil.
+            var updated = profile
+            updated.primaryUsedPercent = primary?.usedPercent
+            updated.secondaryUsedPercent = secondary?.usedPercent
+            do {
+                try env.profileStore.updateMetadata(updated)
+            } catch {
+                logger.error("Failed to persist usage %s for active profile: \(error.localizedDescription, privacy: .public)")
+            }
+            reloadProfiles()
             await runWarmerIfDue(env: env, activeProfileID: profile.id)
             await autoSwitchIfNeeded(
                 env: env,
@@ -287,18 +369,26 @@ final class UsageMonitor {
         return max(date.timeIntervalSinceNow / 60, 0)
     }
 
+    private static let isoFractional: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+    private static let isoBasic: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
+
     private func parseISO8601Date(_ isoString: String?) -> Date? {
         guard let str = isoString else {
             logger.trace("parseISO8601Date: nil input")
             return nil
         }
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = formatter.date(from: str) {
+        if let date = Self.isoFractional.date(from: str) {
             return date
         }
-        formatter.formatOptions = [.withInternetDateTime]
-        if let date = formatter.date(from: str) {
+        if let date = Self.isoBasic.date(from: str) {
             return date
         }
         logger.warning("Failed to parse ISO8601 date: input=\(str, privacy: .public)")

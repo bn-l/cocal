@@ -4,25 +4,34 @@ struct PopoverView: View {
     let monitor: UsageMonitor
     @State private var showingErrors = false
     @State private var showingStats = false
-    @State private var showingProfiles = false
     @State private var stats: UsageStats?
     @State private var keyringMode: CodexConfig.StorageMode = .file
     @State private var showKeyringPrompt = false
     @State private var keyringRewriteError: String?
 
+    /// PLAN.md Appendix A specifies the Profiles section sits inline between
+    /// metrics and the footer — not behind a separate page. Test anchor for
+    /// PopoverInlineProfilesTests.
+    static let embedsProfileSectionInline: Bool = true
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        @Bindable var monitor = monitor
+        return VStack(alignment: .leading, spacing: 12) {
             if showingErrors {
                 errorListView
             } else if showingStats, let stats {
                 StatsView(stats: stats, onDismiss: { showingStats = false })
-            } else if showingProfiles {
-                ProfileListView(monitor: monitor, onDismiss: { showingProfiles = false })
             } else {
                 ZStack(alignment: .top) {
-                    mainContent
-                        .padding(.top, monitor.hasError ? 24 : 0)
-                    if monitor.hasError {
+                    VStack(alignment: .leading, spacing: 12) {
+                        mainContent
+                            .padding(.top, monitor.hasError && !monitor.noProfileImported ? 24 : 0)
+                        if !monitor.noProfileImported {
+                            Divider()
+                            ProfileListView(monitor: monitor)
+                        }
+                    }
+                    if monitor.hasError && !monitor.noProfileImported {
                         errorButton
                     }
                 }
@@ -30,12 +39,10 @@ struct PopoverView: View {
 
             Divider()
 
-            HStack {
-                if let lastUpdated = monitor.lastUpdated {
-                    Text("Updated \(lastUpdated, format: .relative(presentation: .named))")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                }
+            // Footer: flex space-between via Spacer(minLength: 0) between
+            // every adjacent pair. HStack(spacing: 0) so Spacers own the math.
+            HStack(spacing: 0) {
+                // Refresh icon LEFT of timestamp; "Updated" dropped per user request.
                 Button {
                     Task { await monitor.manualPoll() }
                 } label: {
@@ -47,9 +54,18 @@ struct PopoverView: View {
                     }
                 }
                 .buttonStyle(.plain)
+                .pointerCursor()
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .disabled(monitor.isLoading)
+                .help("Refresh usage now")
+                if let lastUpdated = monitor.lastUpdated {
+                    Text("\(lastUpdated, format: .relative(presentation: .named))")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .padding(.leading, 3)
+                }
+                Spacer(minLength: 0)
                 Button {
                     monitor.toggleDisplayMode()
                 } label: {
@@ -58,9 +74,11 @@ struct PopoverView: View {
                         : "gauge.with.needle")
                 }
                 .buttonStyle(.plain)
+                .pointerCursor()
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .help(monitor.displayMode == .calibrator ? "Switch to dual bar" : "Switch to calibrator")
+                Spacer(minLength: 0)
                 Button {
                     stats = monitor.computeStats()
                     showingStats = true
@@ -68,30 +86,20 @@ struct PopoverView: View {
                     Image(systemName: "chart.bar.xaxis")
                 }
                 .buttonStyle(.plain)
+                .pointerCursor()
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .help("View stats")
-                Button {
-                    showingProfiles = true
-                } label: {
-                    Image(systemName: "person.crop.circle.badge.checkmark")
-                }
-                .buttonStyle(.plain)
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-                .help("Profiles")
-                Button {
-                    monitor.autoSwitchEnabled.toggle()
-                } label: {
-                    Image(systemName: monitor.autoSwitchEnabled
-                        ? "arrow.left.arrow.right.circle.fill"
-                        : "arrow.left.arrow.right.circle")
-                }
-                .buttonStyle(.plain)
-                .font(.caption2)
-                .foregroundStyle(monitor.autoSwitchEnabled ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(HierarchicalShapeStyle.tertiary))
-                .help(monitor.autoSwitchEnabled ? "Auto-switch on (click to disable)" : "Auto-switch off (click to enable)")
+                Spacer(minLength: 0)
+                Toggle("Auto switch", isOn: $monitor.autoSwitchEnabled)
+                    .toggleStyle(.button)
+                    .controlSize(.mini)
+                    .tint(.purple)
+                    .font(.caption2)
+                    .pointerCursor()
+                    .help(monitor.autoSwitchEnabled ? "Auto-switch on (click to disable)" : "Auto-switch off (click to enable)")
                 if monitor.needsRestart {
+                    Spacer(minLength: 0)
                     Button {
                         monitor.clearNeedsRestart()
                     } label: {
@@ -99,20 +107,31 @@ struct PopoverView: View {
                             .font(.caption2)
                     }
                     .buttonStyle(.plain)
+                    .pointerCursor()
                     .foregroundStyle(.orange)
                     .help("Restart any running Codex CLI / Codex.app to pick up the new credentials, then click to dismiss.")
                 }
-                Spacer()
+                Spacer(minLength: 0)
                 Button("Quit") {
                     NSApplication.shared.terminate(nil)
                 }
                 .buttonStyle(.plain)
+                .pointerCursor()
                 .font(.caption)
                 .foregroundStyle(.secondary)
             }
         }
         .padding(16)
         .frame(width: 320)
+        .task {
+            // Re-sync the observable profile list every time the popover
+            // opens. `MenuBarExtra(.window)` keeps the SwiftUI tree alive
+            // across opens, so without this an out-of-band store change
+            // (e.g. a CLI delete) wouldn't surface until the next poll.
+            // `.task` runs on the MainActor and is cancelled on disappear,
+            // so this is a one-shot sync, not a leak.
+            monitor.reloadProfiles()
+        }
         .onAppear {
             keyringMode = CodexConfig().detectMode()
             if keyringMode.needsFileMode {
@@ -122,13 +141,12 @@ struct PopoverView: View {
         .onDisappear {
             showingErrors = false
             showingStats = false
-            showingProfiles = false
         }
         .onChange(of: monitor.hasError) { _, hasError in
             if !hasError { showingErrors = false }
         }
-        .alert("Codex is using Keychain storage", isPresented: $showKeyringPrompt) {
-            Button("Switch to file mode") {
+        .alert("Pin Codex to file storage", isPresented: $showKeyringPrompt) {
+            Button("Pin to file mode") {
                 do {
                     try CodexConfig().switchToFileMode()
                     keyringMode = .file
@@ -137,15 +155,30 @@ struct PopoverView: View {
                     keyringRewriteError = error.localizedDescription
                 }
             }
+            .pointerCursor()
             Button("Not now", role: .cancel) {}
+            .pointerCursor()
         } message: {
-            Text("To use codex-switcher, change Codex to file storage and re-run `codex login`. Your `auth.json` will then live at `~/.codex/auth.json` (mode 0600) — the same threat model as our own profile snapshots.")
+            Text("""
+            codex-switcher needs Codex's credentials on disk so it can swap between profiles.
+
+            Your config has cli_auth_credentials_store set to keyring or auto, which means Codex may store credentials in the macOS Keychain. The switcher can't read or replace those.
+
+            Pin Codex to file mode by adding this line to ~/.codex/config.toml:
+
+                cli_auth_credentials_store = "file"
+
+            then re-run `codex login`. Your auth.json will live at ~/.codex/auth.json (mode 0600).
+
+            Tap "Pin to file mode" and we'll add the line for you (existing comments and keys are preserved). You'll still need to re-run `codex login` afterwards if Codex had stored your credential in the Keychain, so it gets moved into the file.
+            """)
         }
         .alert("Couldn't rewrite config.toml", isPresented: Binding(
             get: { keyringRewriteError != nil },
             set: { if !$0 { keyringRewriteError = nil } }
         ), presenting: keyringRewriteError) { _ in
             Button("OK", role: .cancel) {}
+                .pointerCursor()
         } message: { error in
             Text(error)
         }
@@ -153,7 +186,30 @@ struct PopoverView: View {
 
     @ViewBuilder
     private var mainContent: some View {
-        if let metrics = monitor.metrics {
+        if monitor.noProfileImported {
+            // First-run / no-profile state — make Import the obvious next move.
+            // PLAN.md §2.3 calls Import "the only 'add' path", so we surface
+            // the full ProfileListView (which owns the Import button + status
+            // copy) instead of a stub error.
+            VStack(alignment: .leading, spacing: 10) {
+                VStack(spacing: 8) {
+                    Image(systemName: "person.crop.circle.badge.plus")
+                        .font(.largeTitle)
+                        .foregroundStyle(.tint)
+                    Text("Welcome to Codex Switcher")
+                        .font(.headline)
+                    Text("Run `codex login` in a terminal, then click Import to capture the credentials.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+
+                ProfileListView(monitor: monitor)
+            }
+        } else if let metrics = monitor.metrics {
             MetricsView(metrics: metrics)
         } else if monitor.hasError {
             VStack(spacing: 8) {
@@ -182,6 +238,7 @@ struct PopoverView: View {
                 .foregroundStyle(.orange)
         }
         .buttonStyle(.plain)
+        .pointerCursor()
     }
 
     private var errorListView: some View {
@@ -197,6 +254,8 @@ struct PopoverView: View {
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
+                .pointerCursor()
+                .help("Close errors")
             }
             .padding(.bottom, 8)
 

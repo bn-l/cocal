@@ -39,16 +39,17 @@ public actor Warmer: WarmingService {
         } catch let BackendError.refreshFailure(reason) {
             logger.warning("Refresh failed for profile=\(profile.id, privacy: .public): \(reason.rawValue, privacy: .public)")
             updated.warning = ProfileWarning(refreshFailure: reason)
-            try? store.updateMetadata(updated)
+            do { try store.updateMetadata(updated) } catch { logger.error("Metadata write failed: \(error.localizedDescription, privacy: .public)") }
             return updated
         } catch {
             logger.warning("Refresh transport error profile=\(profile.id, privacy: .public): \(String(describing: error), privacy: .public)")
             updated.warning = .unknown
-            try? store.updateMetadata(updated)
+            do { try store.updateMetadata(updated) } catch { logger.error("Metadata write failed: \(error.localizedDescription, privacy: .public)") }
             return updated
         }
 
-        if let usage = try? await perProfile.usage() {
+        let usage = try? await perProfile.usage()
+        if let usage {
             let resolved = usage.resolvedWindows
             updated.primaryUsedPercent = resolved.primary?.usedPercent
             updated.secondaryUsedPercent = resolved.secondary?.usedPercent
@@ -58,8 +59,14 @@ public actor Warmer: WarmingService {
                 ?? accounts.account?.planType
                 ?? updated.planType
         }
-        updated.lastWarmed = now()
-        try? store.updateMetadata(updated)
+        // Only advance freshness if the percent we just stored is current.
+        // `AutoSwitchPicker` keys off `lastWarmed` + `primaryUsedPercent`;
+        // advancing `lastWarmed` after a usage failure would mark stale
+        // percents as fresh and let auto-switch trust the wrong number.
+        if usage != nil {
+            updated.lastWarmed = now()
+        }
+        do { try store.updateMetadata(updated) } catch { logger.error("Metadata write failed: \(error.localizedDescription, privacy: .public)") }
         return updated
     }
 }

@@ -3,56 +3,89 @@ import OSLog
 
 private let logger = Logger(subsystem: "com.bn-l.codex-switcher", category: "ProfileListView")
 
+/// Test seam for `ProfileListReloadTests` and friends. When non-nil, every
+/// `monitor.reloadProfiles()` call hands the freshly-loaded profile array to
+/// this closure. Production code never reads it; only tests assign.
+@MainActor
+enum _ProfileListReloadObserver {
+    static var didReload: (([Profile]) -> Void)?
+}
+
 /// Profile list per PLAN.md §2.3. Each row: status indicator (○/●/⚠), label,
 /// plan tier, "5h XX% · wk XX%" utilization, trash icon. Footer hosts the
 /// Import button.
+///
+/// The profile list itself lives on `UsageMonitor` (which is `@Observable`)
+/// rather than in a local `@State`. With `MenuBarExtra(.window)` the SwiftUI
+/// view tree is kept alive between popover opens, so a `@State` snapshotted
+/// at first init would lock in stale data forever. Reading from the monitor
+/// guarantees every render reflects the current store.
 struct ProfileListView: View {
     let monitor: UsageMonitor
-    let onDismiss: () -> Void
+    /// Optional — only set when the view is presented as a separate page.
+    /// In the inline-in-popover layout (PLAN.md Appendix A) this is `nil`.
+    let onDismiss: (() -> Void)?
 
-    @State private var profiles: [Profile] = []
-    @State private var activeID: String?
     @State private var inFlight = false
-    @State private var importStatus: ImportStatus?
     @State private var pendingRemoval: Profile?
+
+    private var importStatus: UsageMonitor.ImportStatus? { monitor.importStatus }
+
+    init(monitor: UsageMonitor, onDismiss: (() -> Void)? = nil) {
+        self.monitor = monitor
+        self.onDismiss = onDismiss
+        // Intentionally NO side-effect here. Round 3 confirmed that mutating
+        // `monitor.profiles` inside an init that runs during a SwiftUI render
+        // pass can leave the body of *this same instance* reading the stale
+        // value (the user reported empty profile rows even though `poll()`
+        // logs showed the profile loaded). The eager load happens once in
+        // `CodexSwitcherApp.init`; ongoing refreshes happen via
+        // `UsageMonitor.poll()` and `PopoverView`'s `.task` — both of which
+        // mutate from outside any active view body.
+    }
+
+    private var profiles: [Profile] { monitor.profiles }
+    private var activeID: String? { monitor.activeID }
 
     private var environment: AppEnvironment {
         monitor.environment ?? AppEnvironment.shared
     }
 
     var body: some View {
+        let _ = logger.info("ProfileListView.body: profiles.count=\(monitor.profiles.count, privacy: .public) activeID=\(monitor.activeID ?? "nil", privacy: .public)")
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("Profiles")
                     .font(.headline)
                 Spacer()
-                Button {
-                    onDismiss()
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.secondary)
+                if let onDismiss {
+                    Button {
+                        onDismiss()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .pointerCursor()
+                    .help("Close profiles")
                 }
-                .buttonStyle(.plain)
             }
 
             if profiles.isEmpty {
+                let _ = logger.info("ProfileListView: rendering EMPTY state")
                 emptyState
             } else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(Array(profiles.enumerated()), id: \.element.id) { index, profile in
-                            if index > 0 { Divider() }
-                            ProfileRow(
-                                profile: profile,
-                                isActive: profile.id == activeID,
-                                inFlight: inFlight,
-                                onSelect: { activate(profile) },
-                                onRemove: { pendingRemoval = profile }
-                            )
-                        }
-                    }
+                let _ = logger.info("ProfileListView: rendering \(profiles.count, privacy: .public) row(s); first=\(profiles.first?.label ?? "?", privacy: .public)")
+                ForEach(Array(profiles.enumerated()), id: \.element.id) { index, profile in
+                    if index > 0 { Divider() }
+                    ProfileRow(
+                        profile: profile,
+                        isActive: profile.id == activeID,
+                        inFlight: inFlight,
+                        onSelect: { activate(profile) },
+                        onRemove: { pendingRemoval = profile }
+                    )
                 }
-                .frame(maxHeight: 220)
             }
 
             if let status = importStatus {
@@ -60,9 +93,11 @@ struct ProfileListView: View {
                     .font(.caption)
                     .foregroundStyle(status.isError ? .red : .secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                    .transition(.opacity)
             }
 
             HStack {
+                Spacer()
                 Button {
                     runImport()
                 } label: {
@@ -71,11 +106,13 @@ struct ProfileListView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
+                .pointerCursor()
                 .disabled(inFlight)
                 Spacer()
             }
         }
-        .task { reload() }
+        .animation(.easeInOut(duration: 0.3), value: monitor.importStatus)
+        .onAppear { reload() }
         .confirmationDialog(
             "Remove profile?",
             isPresented: Binding(
@@ -87,9 +124,11 @@ struct ProfileListView: View {
             Button("Remove \(profile.label)", role: .destructive) {
                 remove(profile)
             }
+            .pointerCursor()
             Button("Cancel", role: .cancel) {
                 pendingRemoval = nil
             }
+            .pointerCursor()
         } message: { profile in
             Text("This deletes the stored credentials for \(profile.label).")
         }
@@ -107,62 +146,70 @@ struct ProfileListView: View {
     }
 
     private func reload() {
-        profiles = environment.profileStore.loadAll()
-        activeID = environment.slotStore.loadActiveID()
+        monitor.reloadProfiles()
     }
 
     private func runImport() {
         guard !inFlight else { return }
         inFlight = true
-        importStatus = nil
+        monitor.importStatus = nil
         let env = environment
         Task { @MainActor in
             defer { inFlight = false }
             do {
                 let importer = env.makeImporter()
-                let (outcome, _) = try importer.runImport()
+                let (outcome, auth) = try importer.runImport()
                 switch outcome {
                 case .imported(let profile):
-                    importStatus = ImportStatus(
+                    monitor.showImportStatus(.init(
                         message: "Imported \(profile.label).",
                         isError: false
-                    )
+                    ))
                     if env.slotStore.loadActiveID() == nil {
                         try? env.slotStore.setActiveID(profile.id)
                     }
-                    await monitor.manualPoll()
                 case .duplicate(let existing):
-                    importStatus = ImportStatus(
+                    monitor.showImportStatus(.init(
                         message: "No new credentials. \(existing.label) already imported — run `codex login` for a different ChatGPT account and click Import again.",
                         isError: false
-                    )
+                    ))
                 case .refreshed(let existing):
-                    importStatus = ImportStatus(
+                    // Route the write through the PerProfile actor so it
+                    // serializes with any concurrent Warmer refresh and
+                    // invalidates the actor's HTTPS cache.
+                    let actor = env.perProfile(for: existing)
+                    try await actor.importUpdate(with: auth)
+                    monitor.showImportStatus(.init(
                         message: "Refreshed snapshot for \(existing.label).",
                         isError: false
-                    )
+                    ))
                 }
                 reload()
+                // manualPoll re-runs `poll()`, which clears `noProfileImported`
+                // when an active profile exists. Pre-fix only `.imported`
+                // triggered this — `.refreshed` / `.duplicate` left the welcome
+                // panel showing even though the credential was on disk.
+                await monitor.manualPoll()
             } catch Importer.ImportError.noLiveAuth {
-                importStatus = ImportStatus(
+                monitor.showImportStatus(.init(
                     message: "No `auth.json` found. Run `codex login` first.",
                     isError: true
-                )
+                ))
             } catch let Importer.ImportError.malformed(detail) {
-                importStatus = ImportStatus(
+                monitor.showImportStatus(.init(
                     message: "Live auth.json is malformed: \(detail)",
                     isError: true
-                )
+                ))
             } catch Importer.ImportError.missingDedupClaims {
-                importStatus = ImportStatus(
+                monitor.showImportStatus(.init(
                     message: "Live auth.json is missing chatgpt_user_id / chatgpt_account_id claims. Re-run `codex login`.",
                     isError: true
-                )
+                ))
             } catch {
-                importStatus = ImportStatus(
+                monitor.showImportStatus(.init(
                     message: "Import failed: \(error.localizedDescription)",
                     isError: true
-                )
+                ))
             }
         }
     }
@@ -187,10 +234,10 @@ struct ProfileListView: View {
                 await monitor.manualPoll()
             } catch {
                 logger.error("Switch failed: \(String(describing: error), privacy: .public)")
-                importStatus = ImportStatus(
+                monitor.showImportStatus(.init(
                     message: "Switch failed: \(error.localizedDescription)",
                     isError: true
-                )
+                ))
             }
         }
     }
@@ -207,18 +254,14 @@ struct ProfileListView: View {
                 reload()
             } catch {
                 logger.error("Remove failed: \(String(describing: error), privacy: .public)")
-                importStatus = ImportStatus(
+                monitor.showImportStatus(.init(
                     message: "Remove failed: \(error.localizedDescription)",
                     isError: true
-                )
+                ))
             }
         }
     }
 
-    private struct ImportStatus: Equatable {
-        let message: String
-        let isError: Bool
-    }
 }
 
 private struct ProfileRow: View {
@@ -256,10 +299,12 @@ private struct ProfileRow: View {
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
+            .pointerCursor()
             .help("Remove \(profile.label)")
         }
         .padding(.vertical, 6)
         .contentShape(Rectangle())
+        .pointerCursor()
         .onTapGesture {
             if profile.warning == nil && !isActive {
                 onSelect()

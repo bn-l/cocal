@@ -5,14 +5,23 @@ import CoreGraphics
 /// menu-bar label. Pixels are placed by hand, no font subsetter required.
 ///
 /// Layout in the icon: a 3px-wide column on the left, 5 letters stacked top→
-/// bottom (C, O, D, E, X), 3px each. Total label height = 15px, which centers
-/// vertically in the 18px icon with 1.5px breathing room top and bottom.
+/// bottom (C, O, D, E, X), each 3px tall, with a 1px gap between adjacent
+/// letters so they don't read as a smear. Total label height = 5×3 + 4×1 = 19
+/// px, which is exactly the 19px iconSize in `CalibratorIcon` — the label
+/// claims the full vertical space available to it.
 enum CodexLabel {
     static let glyphWidth: Int = 3
     static let glyphHeight: Int = 3
     static let letterCount: Int = 5
-    /// Total label height in pixels.
-    static var totalHeight: CGFloat { CGFloat(glyphHeight * letterCount) }
+    /// Vertical gap between adjacent letters, in pixels.
+    static let letterGap: Int = 1
+    /// Pixels each letter "occupies" in the stacking grid (its own height plus
+    /// the gap below it). The last letter has no gap below.
+    private static let stride: Int = glyphHeight + letterGap
+    /// Total label height in pixels: N letters × glyphHeight + (N-1) gaps.
+    static var totalHeight: CGFloat {
+        CGFloat(letterCount * glyphHeight + (letterCount - 1) * letterGap)
+    }
 
     /// Each glyph: 3 rows of 3 bits, MSB = leftmost pixel. Glyphs are listed
     /// top-to-bottom in the rendered label.
@@ -51,8 +60,10 @@ enum CodexLabel {
         let topY = floor((iconHeight + totalHeight) / 2)
         for (letterIndex, rows) in glyphs.enumerated() {
             for (rowIndex, rowBits) in rows.enumerated() {
-                // y for this row, where row 0 is the top of the letter.
-                let pixelY = topY - CGFloat(letterIndex * glyphHeight + rowIndex + 1)
+                // y for this row, where row 0 is the top of the letter. Stride
+                // includes the inter-letter gap so each letter slot is 4px tall
+                // (3px glyph + 1px breathing room below).
+                let pixelY = topY - CGFloat(letterIndex * stride + rowIndex + 1)
                 for col in 0..<glyphWidth {
                     let bit = (rowBits >> (glyphWidth - 1 - col)) & 0b1
                     if bit == 1 {
