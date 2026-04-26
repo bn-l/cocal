@@ -8,21 +8,31 @@ struct CalibratorIcon: View {
     let calibrator: Double
     let sessionDeviation: Double
     let dailyDeviation: Double
-    let dailyBudgetRemaining: Double
+    /// `nil` when there isn't enough trend data to draw a daily-budget bar
+    /// (fresh profile, no snapshot yet). Dual-bar mode draws an empty track
+    /// instead of a misleading full-green bar.
+    let dailyBudgetRemaining: Double?
     let displayMode: MenuBarDisplayMode
     var isSessionActive = true
     var hasError = false
     var needsRestart = false
 
-    /// Total icon edge in pixels.
-    private static let iconSize: CGFloat = 18
-    /// Pixel column reserved for the vertical "Codex" label on the left.
+    /// Total icon edge in pixels. Matches `CodexLabel.totalHeight` so the
+    /// vertical "CODEX" label uses every pixel of vertical space (5 letters ×
+    /// 3px + 4 inter-letter gaps × 1px = 19px).
+    private static let iconSize: CGFloat = 19
+    /// Pixel column reserved for the vertical "Codex" label, drawn on the
+    /// LEFT side of the icon (user request, Round 3 — earlier rounds put it
+    /// on the right; the new layout has the label hugging the leading edge
+    /// and the gauge taking the remaining width).
     private static let labelColumnWidth: CGFloat = CGFloat(CodexLabel.glyphWidth)
     /// Gap between the label column and the gauge area.
     private static let labelGap: CGFloat = 1
-    /// Gauge area starts after the label column + gap.
-    private static var gaugeOriginX: CGFloat { labelColumnWidth + labelGap }
-    private static var gaugeWidth: CGFloat { iconSize - gaugeOriginX }
+    /// X-origin of the left-side label column.
+    static var labelOriginX: CGFloat { 0 }
+    /// Gauge area sits to the right of the label column.
+    static var gaugeOriginX: CGFloat { labelColumnWidth + labelGap }
+    static var gaugeWidth: CGFloat { iconSize - labelColumnWidth - labelGap }
 
     var body: some View {
         if hasError {
@@ -44,7 +54,7 @@ struct CalibratorIcon: View {
                 return false
             }
 
-            CodexLabel.draw(in: ctx, originX: 0, iconHeight: size, color: NSColor.labelColor.cgColor)
+            CodexLabel.draw(in: ctx, originX: Self.labelOriginX, iconHeight: size, color: NSColor.labelColor.cgColor)
 
             if needsRestart {
                 drawRestartGlyph(ctx: ctx, originX: Self.gaugeOriginX, width: Self.gaugeWidth, size: size)
@@ -90,7 +100,7 @@ struct CalibratorIcon: View {
                 return false
             }
 
-            CodexLabel.draw(in: ctx, originX: 0, iconHeight: size, color: NSColor.labelColor.cgColor)
+            CodexLabel.draw(in: ctx, originX: Self.labelOriginX, iconHeight: size, color: NSColor.labelColor.cgColor)
 
             if needsRestart {
                 drawRestartGlyph(ctx: ctx, originX: Self.gaugeOriginX, width: Self.gaugeWidth, size: size)
@@ -115,15 +125,17 @@ struct CalibratorIcon: View {
                 }
             }
 
-            // Right bar — daily budget gauge
-            let remaining = max(0, min(1, dailyBudgetRemaining))
-            let gaugeHeight = max(remaining > 0 ? 1.0 : 0.0, CGFloat(remaining) * size)
-            if gaugeHeight > 0.5 {
-                let hue = CGFloat(remaining) * (120.0 / 360.0)
-                let color = NSColor(hue: hue, saturation: 0.6, brightness: 0.925, alpha: 1.0).cgColor
-                ctx.setFillColor(color)
-                let gaugeY = (size - gaugeHeight) / 2
-                ctx.fill(CGRect(x: gaugeOriginX + barWidth + gap, y: gaugeY, width: barWidth, height: gaugeHeight))
+            // Right bar — daily budget gauge. Skip entirely if undefined.
+            if let dailyBudgetRemaining {
+                let remaining = max(0, min(1, dailyBudgetRemaining))
+                let gaugeHeight = max(remaining > 0 ? 1.0 : 0.0, CGFloat(remaining) * size)
+                if gaugeHeight > 0.5 {
+                    let hue = CGFloat(remaining) * (120.0 / 360.0)
+                    let color = NSColor(hue: hue, saturation: 0.6, brightness: 0.925, alpha: 1.0).cgColor
+                    ctx.setFillColor(color)
+                    let gaugeY = (size - gaugeHeight) / 2
+                    ctx.fill(CGRect(x: gaugeOriginX + barWidth + gap, y: gaugeY, width: barWidth, height: gaugeHeight))
+                }
             }
 
             // Center line — left (session deviation) bar only

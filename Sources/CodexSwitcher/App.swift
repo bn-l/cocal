@@ -24,7 +24,7 @@ struct CodexSwitcherApp: App {
                 calibrator: monitor.metrics?.calibrator ?? 0,
                 sessionDeviation: monitor.metrics?.sessionDeviation ?? 0,
                 dailyDeviation: monitor.metrics?.dailyDeviation ?? 0,
-                dailyBudgetRemaining: monitor.metrics?.dailyBudgetRemaining ?? 1,
+                dailyBudgetRemaining: monitor.metrics?.dailyBudgetRemaining,
                 displayMode: monitor.displayMode,
                 isSessionActive: monitor.metrics?.isSessionActive ?? true,
                 hasError: monitor.hasError,

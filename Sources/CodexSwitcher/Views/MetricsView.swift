@@ -129,24 +129,16 @@ struct DeviationRow: View {
 
 struct BudgetGaugeRow: View {
     let label: String
-    let remaining: Double
+    let remaining: Double?
 
     var body: some View {
-        let clamped = min(max(remaining, 0), 1)
-        let percent = Int(round(clamped * 100))
-        let color = Color(
-            hue: clamped * (120.0 / 360.0),
-            saturation: 0.6,
-            brightness: 0.925
-        )
-
         VStack(alignment: .leading, spacing: 3) {
             HStack {
                 Text(label)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
-                Text("\(percent)%")
+                Text(remaining.map { "\(Int(round(min(max($0, 0), 1) * 100)))%" } ?? "—")
                     .font(.caption)
                     .fontWeight(.medium)
                     .monospacedDigit()
@@ -157,9 +149,17 @@ struct BudgetGaugeRow: View {
                     RoundedRectangle(cornerRadius: 3)
                         .fill(Color.primary.opacity(0.08))
 
-                    RoundedRectangle(cornerRadius: 3)
-                        .fill(color)
-                        .frame(width: geo.size.width * clamped)
+                    if let remaining {
+                        let clamped = min(max(remaining, 0), 1)
+                        let color = Color(
+                            hue: clamped * (120.0 / 360.0),
+                            saturation: 0.6,
+                            brightness: 0.925
+                        )
+                        RoundedRectangle(cornerRadius: 3)
+                            .fill(color)
+                            .frame(width: geo.size.width * clamped)
+                    }
                 }
             }
             .frame(height: 8)

@@ -166,7 +166,10 @@ struct DailyBudgetBreakdown: Codable, Sendable, Equatable {
     let daysRemaining: Double
     let dailyAllotment: Double
     let deviation: Double
-    let remainingBudgetFraction: Double
+    /// `nil` when there isn't enough data to claim a meaningful daily budget
+    /// (no snapshot yet, or no usage growth since the snapshot). The popover
+    /// renders this as "—" rather than an unfounded "100%".
+    let remainingBudgetFraction: Double?
 }
 
 struct PacingCalibratorState: Codable, Sendable, Equatable {

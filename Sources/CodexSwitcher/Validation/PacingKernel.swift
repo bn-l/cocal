@@ -311,30 +311,36 @@ enum PacingKernel {
         current poll: PacingPollSample,
         snapshot: PacingDailySnapshotSample?
     ) -> DailyBudgetBreakdown {
+        // No baseline snapshot — daily budget is undefined. Returning 100% would
+        // gaslight the user on a profile that already has weekly usage. Return
+        // `nil` so the UI renders "—".
         guard let snapshot else {
-            return .init(dailyDelta: 0, daysRemaining: 0.01, dailyAllotment: 0, deviation: 0, remainingBudgetFraction: 1)
+            return .init(dailyDelta: 0, daysRemaining: 0.01, dailyAllotment: 0, deviation: 0, remainingBudgetFraction: nil)
         }
 
         let dailyDelta = max(poll.weeklyUsage - snapshot.weeklyUsagePct, 0)
+        // Snapshot exists but no growth yet — nothing to gauge against.
         guard dailyDelta > 0 else {
             return .init(
                 dailyDelta: 0,
                 daysRemaining: max(snapshot.weeklyMinsLeft / 1440.0, 0.01),
                 dailyAllotment: max(100 - snapshot.weeklyUsagePct, 0) / max(snapshot.weeklyMinsLeft / 1440.0, 0.01),
                 deviation: 0,
-                remainingBudgetFraction: 1
+                remainingBudgetFraction: nil
             )
         }
         let daysRemaining = max(snapshot.weeklyMinsLeft / 1440.0, 0.01)
         let dailyAllotment = max(100 - snapshot.weeklyUsagePct, 0) / daysRemaining
 
+        // Allotment collapses to ≈0 when the user is already at/over the weekly
+        // cap; surfacing 100% remaining would be misleading there too.
         guard dailyAllotment > 0.01 else {
             return .init(
                 dailyDelta: dailyDelta,
                 daysRemaining: daysRemaining,
                 dailyAllotment: dailyAllotment,
                 deviation: 0,
-                remainingBudgetFraction: 1
+                remainingBudgetFraction: nil
             )
         }
 

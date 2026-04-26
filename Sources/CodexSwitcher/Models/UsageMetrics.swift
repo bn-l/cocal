@@ -10,7 +10,9 @@ struct UsageMetrics: Sendable {
     let sessionTarget: Double
     let sessionDeviation: Double
     let dailyDeviation: Double
-    let dailyBudgetRemaining: Double
+    /// `nil` when the optimiser hasn't observed enough usage trend yet — the
+    /// UI must render "—", not "100%".
+    let dailyBudgetRemaining: Double?
     let weeklyDeviation: Double
     let sessionElapsedPct: Double
     let weeklyElapsedPct: Double

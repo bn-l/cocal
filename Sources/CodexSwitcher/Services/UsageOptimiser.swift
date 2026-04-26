@@ -14,7 +14,10 @@ struct OptimiserResult: Sendable {
     let isNewSession: Bool
     let sessionDeviation: Double
     let dailyDeviation: Double
-    let dailyBudgetRemaining: Double
+    /// `nil` until there's enough trend data (a daily snapshot plus actual
+    /// usage growth) to claim a meaningful daily budget. The popover renders
+    /// this as "—" instead of misleading "100%".
+    let dailyBudgetRemaining: Double?
 }
 
 @MainActor
@@ -132,7 +135,7 @@ final class UsageOptimiser {
 
         persist()
 
-        logger.info("Poll recorded: calibrator=\(decision.calibrator.smoothedOutput, privacy: .public) target=\(decision.sessionTarget.target, privacy: .public) optimalRate=\(decision.optimalRate.optimalRate, privacy: .public) weeklyDev=\(decision.weekly.finalDeviation, privacy: .public) sessionDev=\(decision.sessionDeviation.finalDeviation, privacy: .public) dailyDev=\(decision.dailyBudget.deviation, privacy: .public) dailyRemaining=\(decision.dailyBudget.remainingBudgetFraction, privacy: .public) newSession=\(isNewSession, privacy: .public)")
+        logger.info("Poll recorded: calibrator=\(decision.calibrator.smoothedOutput, privacy: .public) target=\(decision.sessionTarget.target, privacy: .public) optimalRate=\(decision.optimalRate.optimalRate, privacy: .public) weeklyDev=\(decision.weekly.finalDeviation, privacy: .public) sessionDev=\(decision.sessionDeviation.finalDeviation, privacy: .public) dailyDev=\(decision.dailyBudget.deviation, privacy: .public) dailyRemaining=\(decision.dailyBudget.remainingBudgetFraction ?? -1, privacy: .public) newSession=\(isNewSession, privacy: .public)")
 
         return OptimiserResult(
             calibrator: decision.calibrator.smoothedOutput,
