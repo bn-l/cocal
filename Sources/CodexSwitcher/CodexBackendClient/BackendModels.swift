@@ -22,36 +22,74 @@ public enum BackendConstants {
 /// Response from `GET /backend-api/wham/usage`. Every field is `Optional` per the
 /// M2 decision-gate strategy: we want to *survive* shape changes from OpenAI and
 /// surface the drift as missing data rather than throw and brick the menu-bar.
+///
+/// Canonical shape (verified against `openai/codex`'s `RateLimitWindowSnapshot`
+/// model and prior-art Codex switchers):
+/// ```
+/// {
+///   "plan_type": "plus",
+///   "rate_limit": {
+///     "primary_window":   { "used_percent": …, "limit_window_seconds": …, "reset_after_seconds": …, "reset_at": <unix epoch> },
+///     "secondary_window": { … }
+///   }
+/// }
+/// ```
+/// We also accept the legacy `rate_limits` (plural) / `primary`/`secondary` shape
+/// some earlier prior-art docs described, plus the flat top-level `primary` /
+/// `secondary` form, so a future shape revert doesn't brick the menu bar.
 public struct UsageResponse: Codable, Sendable, Equatable {
     public let primary: UsageWindow?
     public let secondary: UsageWindow?
 
-    /// Some prior-art tools have observed `rate_limits` as the top-level key instead
-    /// of split `primary`/`secondary`. We accept both shapes.
+    /// Canonical shape: `rate_limit` (singular) wrapping `primary_window` /
+    /// `secondary_window`.
+    public let rateLimit: RateLimit?
+
+    /// Legacy shape some earlier prior-art docs described: `rate_limits` (plural)
+    /// wrapping bare `primary` / `secondary`.
     public let rateLimits: RateLimits?
 
     private enum CodingKeys: String, CodingKey {
         case primary
         case secondary
+        case rateLimit = "rate_limit"
         case rateLimits = "rate_limits"
     }
 
     /// Resolves whichever wrapping shape the server emitted to a flat `(primary, secondary)`.
     public var resolvedWindows: (primary: UsageWindow?, secondary: UsageWindow?) {
-        if let r = rateLimits { return (r.primary ?? primary, r.secondary ?? secondary) }
+        if let r = rateLimit {
+            return (r.primaryWindow ?? primary, r.secondaryWindow ?? secondary)
+        }
+        if let r = rateLimits {
+            return (r.primary ?? primary, r.secondary ?? secondary)
+        }
         return (primary, secondary)
     }
 }
 
+/// Canonical wrapper — `rate_limit.primary_window` / `rate_limit.secondary_window`.
+public struct RateLimit: Codable, Sendable, Equatable {
+    public let primaryWindow: UsageWindow?
+    public let secondaryWindow: UsageWindow?
+
+    private enum CodingKeys: String, CodingKey {
+        case primaryWindow = "primary_window"
+        case secondaryWindow = "secondary_window"
+    }
+}
+
+/// Legacy wrapper — kept for back-compat against earlier shape documentation.
 public struct RateLimits: Codable, Sendable, Equatable {
     public let primary: UsageWindow?
     public let secondary: UsageWindow?
 }
 
 public struct UsageWindow: Codable, Sendable, Equatable {
-    /// 0–100. Server has been observed using both `used_percent` and `usage_percent`;
-    /// the live-conformance test in M2's decision gate (PLAN.md §4) will pin which one
-    /// to keep. Until then the consumer can also derive percent from `used`/`limit`.
+    /// 0–100. Decoded with three fallbacks (in order): `used_percent`,
+    /// `usage_percent`, then derived from `used`/`limit`. The server has been
+    /// observed emitting either of the percent keys; without the fallbacks the
+    /// menu-bar gauge and auto-switch can read 0% on a real-but-unfamiliar shape.
     public let usedPercent: Double?
 
     /// Window label, e.g. `5h_rolling`, `weekly`. Used for diagnostics; we infer
@@ -74,6 +112,13 @@ public struct UsageWindow: Codable, Sendable, Equatable {
         case remaining
     }
 
+    private enum AlternateKeys: String, CodingKey {
+        case usagePercent = "usage_percent"
+        // Canonical key per openai/codex's `RateLimitWindowSnapshot` is `reset_at`
+        // (no `s`). Earlier prior-art tools used `resets_at`. Accept both.
+        case resetAt = "reset_at"
+    }
+
     public init(usedPercent: Double?, window: String?, resetsAt: Date?, limit: Double?, used: Double?, remaining: Double?) {
         self.usedPercent = usedPercent
         self.window = window
@@ -81,6 +126,29 @@ public struct UsageWindow: Codable, Sendable, Equatable {
         self.limit = limit
         self.used = used
         self.remaining = remaining
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let alt = try decoder.container(keyedBy: AlternateKeys.self)
+
+        let primaryPercent = try c.decodeIfPresent(Double.self, forKey: .usedPercent)
+        let alternatePercent = try alt.decodeIfPresent(Double.self, forKey: .usagePercent)
+        let limit = try c.decodeIfPresent(Double.self, forKey: .limit)
+        let used = try c.decodeIfPresent(Double.self, forKey: .used)
+        let derivedPercent: Double? = {
+            guard let limit, limit > 0, let used else { return nil }
+            return (used / limit) * 100
+        }()
+
+        self.usedPercent = primaryPercent ?? alternatePercent ?? derivedPercent
+        self.window = try c.decodeIfPresent(String.self, forKey: .window)
+        let resetsViaPrimaryKey = try c.decodeIfPresent(Date.self, forKey: .resetsAt)
+        let resetsViaCanonicalKey = try alt.decodeIfPresent(Date.self, forKey: .resetAt)
+        self.resetsAt = resetsViaPrimaryKey ?? resetsViaCanonicalKey
+        self.limit = limit
+        self.used = used
+        self.remaining = try c.decodeIfPresent(Double.self, forKey: .remaining)
     }
 }
 
@@ -155,6 +223,16 @@ public struct AuthJSON: Codable, Sendable, Equatable {
         self.tokens = tokens
         self.lastRefresh = lastRefresh
     }
+
+    /// Freshness indicator used to decide which of two snapshots is newer.
+    /// Prefers `lastRefresh` when available; falls back to the access token's
+    /// `exp` claim. Returns `nil` when neither is available.
+    public var freshnessMarker: Date? {
+        if let lastRefresh { return lastRefresh }
+        guard let token = tokens?.accessToken,
+              let claims = try? JWT.decode(token) else { return nil }
+        return claims.exp
+    }
 }
 
 public struct AuthTokens: Codable, Sendable, Equatable {
@@ -178,6 +256,22 @@ public struct AuthTokens: Codable, Sendable, Equatable {
     }
 }
 
+/// Shared date formatters — `ISO8601DateFormatter` is expensive to construct,
+/// and the custom date strategy closure runs for every `Date` field in every
+/// decoded response.
+// ISO8601DateFormatter is not Sendable, but these are effectively immutable
+// after initialization — created once, read-only thereafter.
+nonisolated(unsafe) private let isoFractional: ISO8601DateFormatter = {
+    let f = ISO8601DateFormatter()
+    f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return f
+}()
+nonisolated(unsafe) private let isoBasic: ISO8601DateFormatter = {
+    let f = ISO8601DateFormatter()
+    f.formatOptions = [.withInternetDateTime]
+    return f
+}()
+
 /// Decoder configured to parse the timestamp formats the Codex backend emits.
 /// Several endpoints return RFC 3339 with fractional seconds; the OAuth path
 /// uses Unix `expires_in` so it doesn't need date decoding.
@@ -186,11 +280,7 @@ public func backendJSONDecoder() -> JSONDecoder {
     decoder.dateDecodingStrategy = .custom { decoder in
         let container = try decoder.singleValueContainer()
         if let raw = try? container.decode(String.self) {
-            let isoFractional = ISO8601DateFormatter()
-            isoFractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
             if let date = isoFractional.date(from: raw) { return date }
-            let isoBasic = ISO8601DateFormatter()
-            isoBasic.formatOptions = [.withInternetDateTime]
             if let date = isoBasic.date(from: raw) { return date }
         }
         if let epoch = try? container.decode(Double.self) {
