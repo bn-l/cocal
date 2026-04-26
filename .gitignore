@@ -135,3 +135,4 @@ target/
 **/*.rs.bk
 *.pdb
 Cargo.lock.bak
+/PLAN.md
