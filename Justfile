@@ -3,19 +3,19 @@
 # Default recipe: build the app bundle
 default: app
 
-# Build CodexSwitcher.app bundle to ./build/
+# Build Cocal.app bundle to ./build/
 app:
     @mkdir -p build
     xcodebuild -project CodexSwitcher.xcodeproj -scheme CodexSwitcher -configuration Debug -destination 'platform=macOS,arch=arm64' -quiet
-    @rm -rf build/CodexSwitcher.app
-    @cp -R ~/Library/Developer/Xcode/DerivedData/CodexSwitcher-*/Build/Products/Debug/CodexSwitcher.app build/
+    @rm -rf build/Cocal.app
+    @cp -R ~/Library/Developer/Xcode/DerivedData/CodexSwitcher-*/Build/Products/Debug/Cocal.app build/
 
 # Build release app bundle
 app-release:
     @mkdir -p build
     xcodebuild -project CodexSwitcher.xcodeproj -scheme CodexSwitcher -configuration Release -destination 'platform=macOS,arch=arm64' -quiet
-    @rm -rf build/CodexSwitcher.app
-    @cp -R ~/Library/Developer/Xcode/DerivedData/CodexSwitcher-*/Build/Products/Release/CodexSwitcher.app build/
+    @rm -rf build/Cocal.app
+    @cp -R ~/Library/Developer/Xcode/DerivedData/CodexSwitcher-*/Build/Products/Release/Cocal.app build/
 
 # Regenerate Xcode project from project.yml
 gen:
@@ -28,7 +28,7 @@ clean:
 
 # Run the app
 run: app
-    open build/CodexSwitcher.app
+    open build/Cocal.app
 
 # Run tests via swift test (faster than xcodebuild for non-UI work)
 test:
@@ -47,9 +47,9 @@ dmg: app-release
     #!/usr/bin/env bash
     set -euo pipefail
     VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" Info.plist)
-    DMG="build/CodexSwitcher_${VERSION}.dmg"
+    DMG="build/Cocal_${VERSION}.dmg"
     rm -f "$DMG"
-    hdiutil create "$DMG" -volname "CodexSwitcher" -srcfolder build/CodexSwitcher.app -ov -format UDZO
+    hdiutil create "$DMG" -volname "Cocal" -srcfolder build/Cocal.app -ov -format UDZO
     echo "$DMG"
 
 # Create GitHub release with DMG
@@ -57,8 +57,8 @@ release: dmg
     #!/usr/bin/env bash
     set -euo pipefail
     VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" Info.plist)
-    DMG="build/CodexSwitcher_${VERSION}.dmg"
+    DMG="build/Cocal_${VERSION}.dmg"
     SHA=$(shasum -a 256 "$DMG" | cut -d' ' -f1)
-    gh release create "v${VERSION}" "$DMG" --title "CodexSwitcher v${VERSION}" --notes "See assets to download and install."
+    gh release create "v${VERSION}" "$DMG" --title "Cocal v${VERSION}" --notes "See assets to download and install." --repo bn-l/cocal
     echo ""
     echo "SHA256: ${SHA}"

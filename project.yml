@@ -23,7 +23,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.bn-l.codex-switcher
-        PRODUCT_NAME: CodexSwitcher
+        PRODUCT_NAME: Cocal
         SWIFT_VERSION: "6.2"
         MACOSX_DEPLOYMENT_TARGET: "15.0"
         CODE_SIGN_ENTITLEMENTS: CodexSwitcher.entitlements
