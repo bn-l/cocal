@@ -17,22 +17,8 @@ struct CalibratorIcon: View {
     var hasError = false
     var needsRestart = false
 
-    /// Total icon edge in pixels. Matches `CodexLabel.totalHeight` so the
-    /// vertical "CODEX" label uses every pixel of vertical space (5 letters ×
-    /// 3px + 4 inter-letter gaps × 1px = 19px).
+    /// Total icon edge in pixels.
     private static let iconSize: CGFloat = 19
-    /// Pixel column reserved for the vertical "Codex" label, drawn on the
-    /// LEFT side of the icon (user request, Round 3 — earlier rounds put it
-    /// on the right; the new layout has the label hugging the leading edge
-    /// and the gauge taking the remaining width).
-    private static let labelColumnWidth: CGFloat = CGFloat(CodexLabel.glyphWidth)
-    /// Gap between the label column and the gauge area.
-    private static let labelGap: CGFloat = 1
-    /// X-origin of the left-side label column.
-    static var labelOriginX: CGFloat { 0 }
-    /// Gauge area sits to the right of the label column.
-    static var gaugeOriginX: CGFloat { labelColumnWidth + labelGap }
-    static var gaugeWidth: CGFloat { iconSize - labelColumnWidth - labelGap }
 
     var body: some View {
         if hasError {
@@ -54,18 +40,14 @@ struct CalibratorIcon: View {
                 return false
             }
 
-            CodexLabel.draw(in: ctx, originX: Self.labelOriginX, iconHeight: size, color: NSColor.labelColor.cgColor)
-
             if needsRestart {
-                drawRestartGlyph(ctx: ctx, originX: Self.gaugeOriginX, width: Self.gaugeWidth, size: size)
+                drawRestartGlyph(ctx: ctx, originX: 0, width: size, size: size)
                 return true
             }
 
-            let gaugeOriginX = Self.gaugeOriginX
-            let gaugeWidth = Self.gaugeWidth
             let centerY = size / 2
-            let barWidth = gaugeWidth * 0.8
-            let barX = gaugeOriginX + (gaugeWidth - barWidth) / 2
+            let barWidth = size * 0.8
+            let barX = (size - barWidth) / 2
             let maxExtent = size / 2
 
             let clamped = max(-1, min(1, calibrator))
@@ -80,9 +62,8 @@ struct CalibratorIcon: View {
                 ctx.fill(CGRect(x: barX, y: barY, width: barWidth, height: barHeight))
             }
 
-            // Center line spans the gauge area only — leaves the label column clean.
             ctx.setFillColor(NSColor.white.cgColor)
-            ctx.fill(CGRect(x: gaugeOriginX, y: centerY - 0.5, width: gaugeWidth, height: 1))
+            ctx.fill(CGRect(x: 0, y: centerY - 0.5, width: size, height: 1))
 
             drawArrow(ctx: ctx, value: calibrator, barX: barX, barWidth: barWidth, size: size)
 
@@ -100,17 +81,13 @@ struct CalibratorIcon: View {
                 return false
             }
 
-            CodexLabel.draw(in: ctx, originX: Self.labelOriginX, iconHeight: size, color: NSColor.labelColor.cgColor)
-
             if needsRestart {
-                drawRestartGlyph(ctx: ctx, originX: Self.gaugeOriginX, width: Self.gaugeWidth, size: size)
+                drawRestartGlyph(ctx: ctx, originX: 0, width: size, size: size)
                 return true
             }
 
-            let gaugeOriginX = Self.gaugeOriginX
-            let gaugeWidth = Self.gaugeWidth
             let gap: CGFloat = 1
-            let barWidth = (gaugeWidth - gap) / 2
+            let barWidth = (size - gap) / 2
             let centerY = size / 2
             let maxExtent = size / 2
 
@@ -121,29 +98,29 @@ struct CalibratorIcon: View {
                 if sHeight > 0.5 {
                     ctx.setFillColor(UsageColor.cgColorFromCalibrator(sClamped))
                     let barY: CGFloat = sClamped >= 0 ? centerY : centerY - sHeight
-                    ctx.fill(CGRect(x: gaugeOriginX, y: barY, width: barWidth, height: sHeight))
+                    ctx.fill(CGRect(x: 0, y: barY, width: barWidth, height: sHeight))
                 }
             }
 
             // Right bar — daily budget gauge. Skip entirely if undefined.
             if let dailyBudgetRemaining {
                 let remaining = max(0, min(1, dailyBudgetRemaining))
-                let gaugeHeight = max(remaining > 0 ? 1.0 : 0.0, CGFloat(remaining) * size)
-                if gaugeHeight > 0.5 {
+                let gaugeH = max(remaining > 0 ? 1.0 : 0.0, CGFloat(remaining) * size)
+                if gaugeH > 0.5 {
                     let hue = CGFloat(remaining) * (120.0 / 360.0)
                     let color = NSColor(hue: hue, saturation: 0.6, brightness: 0.925, alpha: 1.0).cgColor
                     ctx.setFillColor(color)
-                    let gaugeY = (size - gaugeHeight) / 2
-                    ctx.fill(CGRect(x: gaugeOriginX + barWidth + gap, y: gaugeY, width: barWidth, height: gaugeHeight))
+                    let gaugeY = (size - gaugeH) / 2
+                    ctx.fill(CGRect(x: barWidth + gap, y: gaugeY, width: barWidth, height: gaugeH))
                 }
             }
 
             // Center line — left (session deviation) bar only
             ctx.setFillColor(NSColor.white.cgColor)
-            ctx.fill(CGRect(x: gaugeOriginX, y: centerY - 0.5, width: barWidth, height: 1))
+            ctx.fill(CGRect(x: 0, y: centerY - 0.5, width: barWidth, height: 1))
 
             if isSessionActive {
-                drawArrow(ctx: ctx, value: sessionDeviation, barX: gaugeOriginX, barWidth: barWidth, size: size)
+                drawArrow(ctx: ctx, value: sessionDeviation, barX: 0, barWidth: barWidth, size: size)
             }
 
             return true
@@ -179,12 +156,10 @@ struct CalibratorIcon: View {
         ctx.setFillColor(NSColor.white.cgColor)
 
         if clamped > 0 {
-            // Downward arrow at bottom edge (bar is above)
             ctx.move(to: CGPoint(x: barX + barWidth / 2, y: 0))
             ctx.addLine(to: CGPoint(x: barX, y: arrowHeight))
             ctx.addLine(to: CGPoint(x: barX + barWidth, y: arrowHeight))
         } else {
-            // Upward arrow at top edge (bar is below)
             ctx.move(to: CGPoint(x: barX + barWidth / 2, y: size))
             ctx.addLine(to: CGPoint(x: barX, y: size - arrowHeight))
             ctx.addLine(to: CGPoint(x: barX + barWidth, y: size - arrowHeight))
