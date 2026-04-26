@@ -22,40 +22,25 @@ struct AuthPathResolverTests {
         try Data("{}".utf8).write(to: url)
     }
 
-    @Test("CODEX_HOME wins over every other path")
-    func codexHomePrecedence() throws {
+    @Test("CODEX_HOME determines the canonical path when set")
+    func codexHomeOverride() throws {
         let home = Self.makeFakeHome()
         defer { try? FileManager.default.removeItem(at: home) }
 
         let codexHome = home.appendingPathComponent("custom-codex")
         try Self.touch(codexHome.appendingPathComponent("auth.json"))
-        try Self.touch(home.appendingPathComponent(".codex/auth.json"))
 
         let resolver = AuthPathResolver(
             environment: ["CODEX_HOME": codexHome.path],
             homeDirectory: home
         )
+        #expect(resolver.canonicalPath.path == codexHome.appendingPathComponent("auth.json").path)
         #expect(resolver.canonicalReadPath()?.path == codexHome.appendingPathComponent("auth.json").path)
+        #expect(resolver.canonicalWritePath().path == codexHome.appendingPathComponent("auth.json").path)
     }
 
-    @Test("XDG_CONFIG_HOME falls in second when CODEX_HOME absent")
-    func xdgFallback() throws {
-        let home = Self.makeFakeHome()
-        defer { try? FileManager.default.removeItem(at: home) }
-
-        let xdg = home.appendingPathComponent("xdg")
-        try Self.touch(xdg.appendingPathComponent("codex/auth.json"))
-        try Self.touch(home.appendingPathComponent(".codex/auth.json"))
-
-        let resolver = AuthPathResolver(
-            environment: ["XDG_CONFIG_HOME": xdg.path],
-            homeDirectory: home
-        )
-        #expect(resolver.canonicalReadPath()?.path == xdg.appendingPathComponent("codex/auth.json").path)
-    }
-
-    @Test("Falls back to ~/.codex when nothing else is set")
-    func dotCodexFallback() throws {
+    @Test("Defaults to ~/.codex/auth.json when CODEX_HOME is unset")
+    func defaultPath() throws {
         let home = Self.makeFakeHome()
         defer { try? FileManager.default.removeItem(at: home) }
 
@@ -65,29 +50,22 @@ struct AuthPathResolverTests {
         #expect(resolver.canonicalReadPath()?.path == home.appendingPathComponent(".codex/auth.json").path)
     }
 
-    @Test("canonicalWritePath defaults to ~/.codex/auth.json when nothing exists")
-    func writeFallback() throws {
+    @Test("Empty CODEX_HOME falls back to ~/.codex/auth.json")
+    func emptyCodexHome() throws {
+        let home = Self.makeFakeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let resolver = AuthPathResolver(environment: ["CODEX_HOME": ""], homeDirectory: home)
+        #expect(resolver.canonicalPath.path == home.appendingPathComponent(".codex/auth.json").path)
+    }
+
+    @Test("canonicalReadPath returns nil when nothing exists")
+    func readPathNilWhenAbsent() throws {
         let home = Self.makeFakeHome()
         defer { try? FileManager.default.removeItem(at: home) }
 
         let resolver = AuthPathResolver(environment: [:], homeDirectory: home)
         #expect(resolver.canonicalReadPath() == nil)
         #expect(resolver.canonicalWritePath().path == home.appendingPathComponent(".codex/auth.json").path)
-    }
-
-    @Test("hasStraysBesidesCanonical surfaces multi-location scenarios")
-    func detectsStrays() throws {
-        let home = Self.makeFakeHome()
-        defer { try? FileManager.default.removeItem(at: home) }
-
-        let codexHome = home.appendingPathComponent("custom-codex")
-        try Self.touch(codexHome.appendingPathComponent("auth.json"))
-        try Self.touch(home.appendingPathComponent(".codex/auth.json"))
-
-        let resolver = AuthPathResolver(
-            environment: ["CODEX_HOME": codexHome.path],
-            homeDirectory: home
-        )
-        #expect(resolver.hasStraysBesidesCanonical())
     }
 }

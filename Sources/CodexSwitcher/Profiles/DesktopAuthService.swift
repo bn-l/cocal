@@ -55,12 +55,6 @@ public struct DesktopAuthService: Sendable {
         return target
     }
 
-    /// Whether stray non-canonical `auth.json` files exist — caller can show the
-    /// consolidation prompt from PLAN.md §2.3.
-    public func hasStrays() -> Bool {
-        resolver.hasStraysBesidesCanonical()
-    }
-
     #if canImport(Security)
     /// Generic-password entry under service `"Codex Auth"`. Codex.app reads from
     /// here on launch, so updating it lets a freshly-spawned Codex.app see the
