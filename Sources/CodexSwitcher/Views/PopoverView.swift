@@ -91,13 +91,16 @@ struct PopoverView: View {
                 .foregroundStyle(.tertiary)
                 .help("View stats")
                 Spacer(minLength: 0)
-                Toggle("Auto switch", isOn: $monitor.autoSwitchEnabled)
-                    .toggleStyle(.button)
-                    .controlSize(.mini)
-                    .tint(.purple)
-                    .font(.caption2)
-                    .pointerCursor()
-                    .help(monitor.autoSwitchEnabled ? "Auto-switch on (click to disable)" : "Auto-switch off (click to enable)")
+                HStack(spacing: 4) {
+                    Text("Auto switch:")
+                        .font(.caption2)
+                    Toggle("", isOn: $monitor.autoSwitchEnabled)
+                        .toggleStyle(.checkbox)
+                        .labelsHidden()
+                        .controlSize(.mini)
+                }
+                .pointerCursor()
+                .help(monitor.autoSwitchEnabled ? "Auto-switch on (click to disable)" : "Auto-switch off (click to enable)")
                 if monitor.needsRestart {
                     Spacer(minLength: 0)
                     Button {
