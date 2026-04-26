@@ -64,6 +64,16 @@ public struct Importer: Sendable {
         }
 
         if let existing = store.loadByDedupKey(dedupKey) {
+            // Compare the live snapshot's freshness against what's stored. If the
+            // live file has a newer `last_refresh` (or fresher access-token expiry),
+            // overwrite the stored snapshot and surface as `.refreshed` so the UI
+            // can tell the user something useful instead of "duplicate".
+            let storedURL = store.snapshotURL(for: existing.id)
+            let stored = try? Snapshotter.read(storedURL)
+            if shouldPrefer(incoming: auth, over: stored) {
+                try Snapshotter.write(auth, to: storedURL)
+                return (.refreshed(existing: existing), auth)
+            }
             return (.duplicate(existing: existing), auth)
         }
 
@@ -83,4 +93,23 @@ public struct Importer: Sendable {
 
 private extension String {
     var nonEmpty: String? { isEmpty ? nil : self }
+}
+
+private func shouldPrefer(incoming: AuthJSON, over existing: AuthJSON?) -> Bool {
+    guard let existing else { return true }
+    let im = freshnessMarker(for: incoming)
+    let em = freshnessMarker(for: existing)
+    switch (im, em) {
+    case let (i?, e?): return i > e
+    case (.some, nil): return true
+    case (nil, .some): return false
+    case (nil, nil): return false  // No marker either way — leave stored alone (treat as duplicate).
+    }
+}
+
+private func freshnessMarker(for auth: AuthJSON) -> Date? {
+    if let lastRefresh = auth.lastRefresh { return lastRefresh }
+    guard let token = auth.tokens?.accessToken,
+          let claims = try? JWT.decode(token) else { return nil }
+    return claims.exp
 }

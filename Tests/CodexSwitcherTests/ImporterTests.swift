@@ -94,6 +94,113 @@ struct ImporterTests {
         }
     }
 
+    @Test("User-supplied label overrides the email-derived default")
+    func labelOverride() throws {
+        let home = Self.tempHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let liveURL = home.appendingPathComponent(".codex/auth.json")
+        try Self.writeAuthJSON(at: liveURL, dedupUser: "user-1", dedupAccount: "acct-1", email: "ignored@example.com")
+
+        let storeRoot = home.appendingPathComponent("profiles")
+        let store = ProfileStore(rootDirectory: storeRoot)
+        let resolver = AuthPathResolver(environment: [:], homeDirectory: home)
+        let importer = Importer(resolver: resolver, store: store)
+
+        let (outcome, _) = try importer.runImport(label: "Work account")
+        guard case let .imported(profile) = outcome else {
+            #expect(Bool(false), "expected .imported"); return
+        }
+        #expect(profile.label == "Work account")
+    }
+
+    @Test("Empty/whitespace-only label falls back to email")
+    func blankLabelFallsBack() throws {
+        let home = Self.tempHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let liveURL = home.appendingPathComponent(".codex/auth.json")
+        try Self.writeAuthJSON(at: liveURL, dedupUser: "user-1", dedupAccount: "acct-1", email: "alice@example.com")
+
+        let store = ProfileStore(rootDirectory: home.appendingPathComponent("profiles"))
+        let resolver = AuthPathResolver(environment: [:], homeDirectory: home)
+        let importer = Importer(resolver: resolver, store: store)
+
+        let (outcome, _) = try importer.runImport(label: "   ")
+        guard case let .imported(profile) = outcome else {
+            #expect(Bool(false), "expected .imported"); return
+        }
+        #expect(profile.label == "alice@example.com")
+    }
+
+    @Test("Re-import with newer lastRefresh: emits .refreshed and overwrites stored snapshot")
+    func refreshedOutcome() throws {
+        let home = Self.tempHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let liveURL = home.appendingPathComponent(".codex/auth.json")
+        let store = ProfileStore(rootDirectory: home.appendingPathComponent("profiles"))
+        let resolver = AuthPathResolver(environment: [:], homeDirectory: home)
+        let importer = Importer(resolver: resolver, store: store)
+
+        // First import — stores the snapshot with no lastRefresh.
+        try Self.writeAuthJSON(at: liveURL, dedupUser: "user-1", dedupAccount: "acct-1", email: "alice@example.com")
+        _ = try importer.runImport()
+
+        // Pin stored snapshot to an old lastRefresh so the next import is unambiguously fresher.
+        let storedID = store.loadAll().first!.id
+        let storedURL = store.snapshotURL(for: storedID)
+        var stored = try Snapshotter.read(storedURL)
+        stored.lastRefresh = Date(timeIntervalSince1970: 1000)
+        try Snapshotter.write(stored, to: storedURL)
+
+        // Live snapshot bears a newer lastRefresh.
+        var live = try Snapshotter.read(liveURL)
+        live.tokens?.refreshToken = "FRESH"
+        live.lastRefresh = Date(timeIntervalSince1970: 2000)
+        try Snapshotter.write(live, to: liveURL)
+
+        let (outcome, _) = try importer.runImport()
+        guard case .refreshed = outcome else {
+            #expect(Bool(false), "expected .refreshed, got \(outcome)"); return
+        }
+        let after = try Snapshotter.read(storedURL)
+        #expect(after.tokens?.refreshToken == "FRESH")
+    }
+
+    @Test("Re-import with older lastRefresh: still .duplicate, stored snapshot preserved")
+    func duplicateWhenOlder() throws {
+        let home = Self.tempHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let liveURL = home.appendingPathComponent(".codex/auth.json")
+        let store = ProfileStore(rootDirectory: home.appendingPathComponent("profiles"))
+        let resolver = AuthPathResolver(environment: [:], homeDirectory: home)
+        let importer = Importer(resolver: resolver, store: store)
+
+        try Self.writeAuthJSON(at: liveURL, dedupUser: "user-1", dedupAccount: "acct-1", email: "alice@example.com")
+        _ = try importer.runImport()
+
+        let storedID = store.loadAll().first!.id
+        let storedURL = store.snapshotURL(for: storedID)
+        var stored = try Snapshotter.read(storedURL)
+        stored.tokens?.refreshToken = "STORED"
+        stored.lastRefresh = Date(timeIntervalSince1970: 5000)
+        try Snapshotter.write(stored, to: storedURL)
+
+        var live = try Snapshotter.read(liveURL)
+        live.tokens?.refreshToken = "OLDER"
+        live.lastRefresh = Date(timeIntervalSince1970: 3000)
+        try Snapshotter.write(live, to: liveURL)
+
+        let (outcome, _) = try importer.runImport()
+        if case .duplicate = outcome {} else {
+            #expect(Bool(false), "expected .duplicate, got \(outcome)")
+        }
+        let after = try Snapshotter.read(storedURL)
+        #expect(after.tokens?.refreshToken == "STORED")
+    }
+
     @Test("Throws .missingDedupClaims when id_token lacks the chatgpt_* claims")
     func failsWhenJWTLacksClaims() throws {
         let home = Self.tempHome()
