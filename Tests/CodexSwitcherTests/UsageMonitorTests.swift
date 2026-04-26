@@ -113,7 +113,7 @@ struct UsageMonitorMinutesUntilTests {
     @Test("nil input: returns 0")
     func nilInput() {
         let monitor = UsageMonitor()
-        let mins = monitor.minutesUntil(nil)
+        let mins = monitor.minutesUntil(nil as String?)
         #expect(mins == 0)
     }
 

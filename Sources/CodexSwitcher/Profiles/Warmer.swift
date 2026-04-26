@@ -15,7 +15,11 @@ private let logger = Logger(subsystem: "com.bn-l.codex-switcher", category: "War
 ///
 /// All side effects funnel through `PerProfile`; the warmer never writes the live
 /// `~/.codex/auth.json` (only the active swap does that — PLAN.md §2.3).
-public actor Warmer {
+public protocol WarmingService: Sendable {
+    func warm(profile: Profile, actor perProfile: PerProfile) async -> Profile
+}
+
+public actor Warmer: WarmingService {
     private let store: ProfileStore
     private let now: @Sendable () -> Date
 

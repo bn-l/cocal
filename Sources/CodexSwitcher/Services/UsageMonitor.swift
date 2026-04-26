@@ -49,11 +49,10 @@ final class UsageMonitor {
     /// and exercise `processResponse` directly without going through this.
     var environment: AppEnvironment?
 
-    @ObservationIgnored private lazy var notifier = Notifier()
-    @ObservationIgnored private lazy var warmer: Warmer = {
-        Warmer(store: (environment ?? AppEnvironment.shared).profileStore)
-    }()
-    @ObservationIgnored private lazy var autoSwitchPicker = AutoSwitchPicker()
+    /// Test seams. Production uses live implementations; tests inject stubs.
+    @ObservationIgnored var notifier: any NotificationPosting = Notifier()
+    @ObservationIgnored var warmer: (any WarmingService)?
+    @ObservationIgnored var autoSwitchPicker = AutoSwitchPicker()
     /// Profile id that already triggered an auto-switch attempt this poll cycle —
     /// prevents re-firing every 5 minutes while still over threshold.
     @ObservationIgnored private var lastAutoSwitchAttemptForProfileID: String?
@@ -200,7 +199,7 @@ final class UsageMonitor {
     /// than `warmerIntervalSeconds` (or has never been warmed). One warm per
     /// poll cycle keeps refresh-token rotation calls spaced out and avoids
     /// thundering-herd on app start.
-    private func runWarmerIfDue(env: AppEnvironment, activeProfileID: String) async {
+    func runWarmerIfDue(env: AppEnvironment, activeProfileID: String) async {
         let cutoff = Date().addingTimeInterval(-config.warmerIntervalSeconds)
         let due = env.profileStore.loadAll().first { profile in
             guard profile.id != activeProfileID else { return false }
@@ -210,10 +209,12 @@ final class UsageMonitor {
         guard let due else { return }
         logger.info("Warming profile=\(due.label, privacy: .public)")
         let actor = env.perProfile(for: due)
-        _ = await warmer.warm(profile: due, actor: actor)
+        let svc = warmer ?? Warmer(store: env.profileStore)
+        if warmer == nil { warmer = svc }
+        _ = await svc.warm(profile: due, actor: actor)
     }
 
-    private func autoSwitchIfNeeded(
+    func autoSwitchIfNeeded(
         env: AppEnvironment,
         activeProfile: Profile,
         primaryUsedPercent: Double?,
