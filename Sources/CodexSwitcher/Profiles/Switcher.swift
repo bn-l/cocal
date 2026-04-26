@@ -9,9 +9,7 @@ private let logger = Logger(subsystem: "com.bn-l.codex-switcher", category: "Swi
 ///      into profile A's snapshot, absorbing any refresh that happened during
 ///      the active session.
 ///   2. Write profile B's snapshot to the canonical auth path atomically.
-///   3. If Keychain mirroring is enabled, update the `"Codex Auth"` entry
-///      (dedup-key gated).
-///   4. Set the slot store, leaving the popover to flip to needs-restart state.
+///   3. Set the slot store, leaving the popover to flip to needs-restart state.
 ///
 /// Cross-profile coordination uses **ordered acquisition** to prevent deadlock:
 /// always lock the outgoing actor before the incoming actor.
@@ -24,13 +22,16 @@ public actor Switcher {
     public init(
         profileStore: ProfileStore,
         slotStore: SlotStore,
-        desktopAuth: DesktopAuthService = DesktopAuthService(),
+        desktopAuth: DesktopAuthService? = nil,
         resolver: AuthPathResolver = AuthPathResolver()
     ) {
         self.profileStore = profileStore
         self.slotStore = slotStore
-        self.desktopAuth = desktopAuth
         self.resolver = resolver
+        // The capture-live read path and the install write path must agree on
+        // the same resolver, otherwise tests that inject a temp resolver can
+        // read from the temp path but write to the real ~/.codex/auth.json.
+        self.desktopAuth = desktopAuth ?? DesktopAuthService(resolver: resolver)
     }
 
     public enum SwitchError: Error, Equatable {
@@ -66,18 +67,9 @@ public actor Switcher {
         // The per-profile actor owns the snapshot file; we read it under the actor's
         // queue and pass the in-memory bundle to `desktopAuth` for the canonical write.
         let bundle = try await incomingActor.readSnapshot()
-        let outgoingDedupKey: String? = await {
-            guard let actor = outgoingActor else { return nil }
-            return try? await Snapshotter.dedupKey(for: actor.readSnapshot())
-        }()
+        let target = try desktopAuth.install(bundle)
 
-        let target = try desktopAuth.install(
-            bundle,
-            outgoingDedupKey: outgoingDedupKey,
-            incomingDedupKey: incomingProfile.dedupKey
-        )
-
-        // Step 4 — slot pointer.
+        // Step 3 — slot pointer.
         try slotStore.setActiveID(incomingProfile.id)
         logger.info("Activated profile=\(incomingProfile.id, privacy: .public) at=\(target.path, privacy: .public)")
         return target

@@ -82,21 +82,12 @@ public actor PerProfile {
 
     private func shouldPrefer(_ incoming: AuthJSON, over existing: AuthJSON?) -> Bool {
         guard let existing else { return true }
-        let incomingMarker = freshnessMarker(for: incoming)
-        let existingMarker = freshnessMarker(for: existing)
-        switch (incomingMarker, existingMarker) {
+        switch (incoming.freshnessMarker, existing.freshnessMarker) {
         case let (i?, e?): return i > e
         case (.some, nil): return true
         case (nil, .some): return false
         case (nil, nil): return true
         }
-    }
-
-    private func freshnessMarker(for auth: AuthJSON) -> Date? {
-        if let lastRefresh = auth.lastRefresh { return lastRefresh }
-        guard let token = auth.tokens?.accessToken,
-              let claims = try? JWT.decode(token) else { return nil }
-        return claims.exp
     }
 
     // MARK: - Refresh
