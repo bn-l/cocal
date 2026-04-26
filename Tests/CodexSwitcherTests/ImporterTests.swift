@@ -133,7 +133,7 @@ struct ImporterTests {
         #expect(profile.label == "alice@example.com")
     }
 
-    @Test("Re-import with newer lastRefresh: emits .refreshed and overwrites stored snapshot")
+    @Test("Re-import with newer lastRefresh: emits .refreshed with the fresh auth data")
     func refreshedOutcome() throws {
         let home = Self.tempHome()
         defer { try? FileManager.default.removeItem(at: home) }
@@ -160,12 +160,18 @@ struct ImporterTests {
         live.lastRefresh = Date(timeIntervalSince1970: 2000)
         try Snapshotter.write(live, to: liveURL)
 
-        let (outcome, _) = try importer.runImport()
+        let (outcome, auth) = try importer.runImport()
         guard case .refreshed = outcome else {
             #expect(Bool(false), "expected .refreshed, got \(outcome)"); return
         }
+        // The Importer no longer writes the snapshot directly — the caller
+        // routes through PerProfile.importUpdate() to serialize with any
+        // concurrent Warmer refresh. Verify the returned auth carries the
+        // fresh token so the caller has the right data to pass along.
+        #expect(auth.tokens?.refreshToken == "FRESH")
+        // Stored snapshot should be untouched by the Importer.
         let after = try Snapshotter.read(storedURL)
-        #expect(after.tokens?.refreshToken == "FRESH")
+        #expect(after.tokens?.refreshToken == "r", "Importer must not write; stored snapshot should still have the original token")
     }
 
     @Test("Re-import with older lastRefresh: still .duplicate, stored snapshot preserved")
@@ -199,6 +205,85 @@ struct ImporterTests {
         }
         let after = try Snapshotter.read(storedURL)
         #expect(after.tokens?.refreshToken == "STORED")
+    }
+
+    @Test("Live file is malformed JSON: throws .malformed")
+    func malformedLiveFile() throws {
+        let home = Self.tempHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let liveURL = home.appendingPathComponent(".codex/auth.json")
+        try FileManager.default.createDirectory(at: liveURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("not valid json {{{".utf8).write(to: liveURL)
+
+        let store = ProfileStore(rootDirectory: home.appendingPathComponent("profiles"))
+        let resolver = AuthPathResolver(environment: [:], homeDirectory: home)
+        let importer = Importer(resolver: resolver, store: store)
+
+        do {
+            _ = try importer.runImport()
+            #expect(Bool(false), "expected throw")
+        } catch Importer.ImportError.malformed {
+            // ok
+        } catch {
+            #expect(Bool(false), "wrong error: \(error)")
+        }
+    }
+
+    @Test("Live file with no tokens object: throws .malformed")
+    func liveFileMissingTokens() throws {
+        let home = Self.tempHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let liveURL = home.appendingPathComponent(".codex/auth.json")
+        try FileManager.default.createDirectory(at: liveURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        // Valid JSON, but no `tokens` field.
+        try Data(#"{"OPENAI_API_KEY": null}"#.utf8).write(to: liveURL)
+
+        let store = ProfileStore(rootDirectory: home.appendingPathComponent("profiles"))
+        let resolver = AuthPathResolver(environment: [:], homeDirectory: home)
+        let importer = Importer(resolver: resolver, store: store)
+
+        do {
+            _ = try importer.runImport()
+            #expect(Bool(false), "expected throw")
+        } catch let Importer.ImportError.malformed(msg) {
+            #expect(msg.contains("tokens"))
+        } catch {
+            #expect(Bool(false), "wrong error: \(error)")
+        }
+    }
+
+    @Test("planType from id_token claims propagates onto a freshly-imported profile")
+    func planTypePropagates() throws {
+        let home = Self.tempHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let liveURL = home.appendingPathComponent(".codex/auth.json")
+        // Build a token that includes chatgpt_plan_type.
+        let payload: [String: Any] = [
+            "https://api.openai.com/auth": [
+                "chatgpt_user_id": "u",
+                "chatgpt_account_id": "a",
+                "chatgpt_plan_type": "pro_5x",
+            ],
+            "email": "alice@example.com",
+        ]
+        let payloadData = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+        let header = #"{"alg":"none"}"#.data(using: .utf8)!
+        let token = "\(Self.b64url(header)).\(Self.b64url(payloadData)).sig"
+        let auth = AuthJSON(tokens: AuthTokens(idToken: token, accessToken: "a", refreshToken: "r", accountID: "a"))
+        try Snapshotter.write(auth, to: liveURL)
+
+        let store = ProfileStore(rootDirectory: home.appendingPathComponent("profiles"))
+        let resolver = AuthPathResolver(environment: [:], homeDirectory: home)
+        let importer = Importer(resolver: resolver, store: store)
+
+        let (outcome, _) = try importer.runImport()
+        guard case let .imported(p) = outcome else {
+            #expect(Bool(false), "expected .imported"); return
+        }
+        #expect(p.planType == "pro_5x")
     }
 
     @Test("Throws .missingDedupClaims when id_token lacks the chatgpt_* claims")

@@ -5,8 +5,35 @@ import Foundation
 @Suite("Backend Codable models")
 struct BackendModelsTests {
 
-    @Test("UsageResponse decodes the nested rate_limits shape")
-    func decodesNestedRateLimits() throws {
+    // The REAL shape returned by https://chatgpt.com/backend-api/wham/usage —
+    // verified against `openai/codex` `codex-rs/codex-backend-openapi-models` and
+    // the user's own logs ("Codex usage response missing primary window/secondary
+    // window" with this app's previous decoder). The previous fixture used the
+    // wrong key names (`rate_limits` plural, `primary`/`secondary` instead of
+    // `primary_window`/`secondary_window`) which left both windows nil for every
+    // real call.
+    @Test("UsageResponse decodes the canonical rate_limit / *_window shape")
+    func decodesCanonicalRateLimit() throws {
+        let json = Data("""
+        {
+          "plan_type": "plus",
+          "rate_limit": {
+            "primary_window":   {"used_percent": 32.0, "limit_window_seconds": 18000, "reset_after_seconds": 7200,  "reset_at": 1771556400},
+            "secondary_window": {"used_percent": 12.5, "limit_window_seconds": 604800,"reset_after_seconds": 302400,"reset_at": 1771833600}
+          }
+        }
+        """.utf8)
+        let resp = try backendJSONDecoder().decode(UsageResponse.self, from: json)
+        let resolved = resp.resolvedWindows
+        #expect(resolved.primary?.usedPercent == 32.0)
+        #expect(resolved.secondary?.usedPercent == 12.5)
+        // resetsAt must come back as an actual Date, not nil.
+        #expect(resolved.primary?.resetsAt != nil)
+        #expect(resolved.secondary?.resetsAt != nil)
+    }
+
+    @Test("UsageResponse keeps decoding the legacy `rate_limits` plural shape (back-compat)")
+    func decodesLegacyRateLimitsShape() throws {
         let json = Data("""
         {
           "rate_limits": {
@@ -34,6 +61,43 @@ struct BackendModelsTests {
         let resolved = resp.resolvedWindows
         #expect(resolved.primary?.usedPercent == 80.0)
         #expect(resolved.secondary?.usedPercent == 25.0)
+    }
+
+    @Test("UsageWindow decodes the alternate `usage_percent` key when `used_percent` is absent")
+    func decodesAlternateUsagePercentKey() throws {
+        let json = Data("""
+        {"primary": {"usage_percent": 73.0}}
+        """.utf8)
+        let resp = try backendJSONDecoder().decode(UsageResponse.self, from: json)
+        #expect(resp.primary?.usedPercent == 73.0)
+    }
+
+    @Test("UsageWindow derives percent from used/limit when no percent field is emitted")
+    func derivesUsedPercentFromUsedAndLimit() throws {
+        let json = Data("""
+        {"primary": {"used": 250.0, "limit": 1000.0}}
+        """.utf8)
+        let resp = try backendJSONDecoder().decode(UsageResponse.self, from: json)
+        #expect(resp.primary?.usedPercent == 25.0)
+    }
+
+    @Test("UsageWindow prefers used_percent over usage_percent over derived")
+    func percentPreferenceOrder() throws {
+        let json = Data("""
+        {"primary": {"used_percent": 80.0, "usage_percent": 70.0, "used": 60.0, "limit": 100.0}}
+        """.utf8)
+        let resp = try backendJSONDecoder().decode(UsageResponse.self, from: json)
+        #expect(resp.primary?.usedPercent == 80.0)
+    }
+
+    @Test("UsageWindow returns nil percent when neither percent field nor used/limit is present")
+    func nilPercentWhenNoSource() throws {
+        let json = Data("""
+        {"primary": {"window": "5h_rolling"}}
+        """.utf8)
+        let resp = try backendJSONDecoder().decode(UsageResponse.self, from: json)
+        #expect(resp.primary?.usedPercent == nil)
+        #expect(resp.primary?.window == "5h_rolling")
     }
 
     @Test("Date decoder handles RFC 3339 with and without fractional seconds")

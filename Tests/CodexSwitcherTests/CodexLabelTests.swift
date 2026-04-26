@@ -8,7 +8,9 @@ struct CodexLabelTests {
 
     /// Render the label into a tightly-fitting bitmap context and return raw
     /// alpha values per pixel, indexed by `[y][x]` with y=0 at the **top**.
-    private func render(iconHeight: CGFloat = 18, originX: CGFloat = 0) -> [[UInt8]] {
+    /// Default iconHeight matches `CodexLabel.totalHeight` so every glyph
+    /// pixel survives the rasterization.
+    private func render(iconHeight: CGFloat = CodexLabel.totalHeight, originX: CGFloat = 0) -> [[UInt8]] {
         let width = Int(originX) + CodexLabel.glyphWidth + 1
         let height = Int(iconHeight)
         let bytesPerRow = width
@@ -66,10 +68,10 @@ struct CodexLabelTests {
         }
     }
 
-    @Test("Label is vertically centered in 18px icon (1.5px breathing room)")
+    @Test("Label is vertically centered in a larger icon (1px padding top/bottom)")
     func verticalCentering() {
-        let grid = render(iconHeight: 18)
-        // Find first and last row with any lit pixel.
+        // 21px canvas, 19px label → 1px padding on each side.
+        let grid = render(iconHeight: 21)
         var firstLitRow: Int?
         var lastLitRow: Int?
         for (y, row) in grid.enumerated() {
@@ -78,24 +80,26 @@ struct CodexLabelTests {
                 lastLitRow = y
             }
         }
-        #expect(firstLitRow == 2)  // 1.5px breathing rounds to row index 2 (top edge of letter)
-        #expect(lastLitRow == 16)  // bottom-most lit row of X glyph
+        #expect(firstLitRow == 1)  // top padding
+        #expect(lastLitRow == 19)  // bottom-most lit row of X glyph (after 1px pad)
     }
 
     @Test("Top row of C-glyph: pixels (0,top) and (1,top) lit, (2,top) dark")
     func cGlyphTopRow() {
-        let grid = render()
-        let topRow = 2  // matches verticalCentering
+        // Render in a canvas matching totalHeight so the C glyph sits at row 0.
+        let grid = render(iconHeight: CodexLabel.totalHeight)
+        let topRow = 0
         #expect(grid[topRow][0] > 128)
         #expect(grid[topRow][1] > 128)
         #expect(grid[topRow][2] < 128)
     }
 
-    @Test("Middle row of X-glyph (last letter, row 1): only column 1 lit")
+    @Test("Middle row of X-glyph: only column 1 lit")
     func xGlyphMiddleRow() {
-        let grid = render()
-        // X starts at letterIndex=4. Top of X = topRow + 4*3 = 2+12 = 14. Middle = 15.
-        let xMiddle = 14 + 1
+        // Render in a canvas matching totalHeight (19px).
+        // X is letter index 4; with 4px stride it starts at row 16. Middle = 17.
+        let grid = render(iconHeight: CodexLabel.totalHeight)
+        let xMiddle = 16 + 1
         #expect(grid[xMiddle][0] < 128)
         #expect(grid[xMiddle][1] > 128)
         #expect(grid[xMiddle][2] < 128)
@@ -111,8 +115,45 @@ struct CodexLabelTests {
         }
     }
 
-    @Test("totalHeight equals 15 (5 letters × 3 rows)")
-    func totalHeightConstant() {
-        #expect(CodexLabel.totalHeight == 15)
+    /// Issue 7: the label was 15px tall in an 18px icon (5 letters × 3 px,
+    /// no spacing). The user reported the letters needed breathing room
+    /// between them and that the label should claim the full vertical space
+    /// available. Math: 5 letters × 3 px + 4 gaps × 1 px = 19 px → bump
+    /// iconSize so this fits, and verify the label uses every pixel of it.
+    @Test("totalHeight uses full available space (5 letters × 3 + 4 inter-letter gaps × 1)")
+    func totalHeightWithSpacing() {
+        // 5 × 3 + 4 × 1 = 19. Anything less means there's slack.
+        #expect(CodexLabel.totalHeight == 19)
+    }
+
+    @Test("Inter-letter gaps actually exist (rows between each letter contain no lit pixels)")
+    func gapRowsAreEmpty() {
+        // Render at iconHeight = totalHeight so the label fills the whole icon.
+        let height = Int(CodexLabel.totalHeight)
+        let grid = render(iconHeight: CGFloat(height))
+        // Letter-N occupies rows [N*4 .. N*4+2]; row N*4+3 is the gap (for N=0..3).
+        for letterIndex in 0..<4 {
+            let gapRow = letterIndex * (CodexLabel.glyphHeight + 1) + CodexLabel.glyphHeight
+            for x in 0..<CodexLabel.glyphWidth {
+                #expect(grid[gapRow][x] < 128, "Gap row \(gapRow) col \(x) unexpectedly lit")
+            }
+        }
+    }
+
+    @Test("Label spans the full icon vertically when iconHeight == totalHeight")
+    func fillsAvailableVerticalSpace() {
+        let height = Int(CodexLabel.totalHeight)
+        let grid = render(iconHeight: CGFloat(height))
+        // First and last lit rows must touch the top and bottom edges.
+        var firstLit: Int?
+        var lastLit: Int?
+        for (y, row) in grid.enumerated() {
+            if row.contains(where: { $0 > 128 }) {
+                if firstLit == nil { firstLit = y }
+                lastLit = y
+            }
+        }
+        #expect(firstLit == 0)
+        #expect(lastLit == height - 1)
     }
 }

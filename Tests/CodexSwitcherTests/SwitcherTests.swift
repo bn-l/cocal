@@ -88,7 +88,7 @@ struct SwitcherTests {
         let liveAuthA = try makeAuth(user: "user-A", account: "acct-A", refreshToken: "rA-FRESH", lastRefresh: Date())
         try Snapshotter.write(liveAuthA, to: liveURL)
 
-        let desktopAuth = DesktopAuthService(resolver: resolver, keychainEnabled: false)
+        let desktopAuth = DesktopAuthService(resolver: resolver)
         let switcher = Switcher(profileStore: store, slotStore: slotStore, desktopAuth: desktopAuth, resolver: resolver)
 
         let actorA = PerProfile(profileID: profileA.id, snapshotURL: store.snapshotURL(for: profileA.id))
@@ -206,13 +206,39 @@ struct SwitcherTests {
         let switcher = Switcher(
             profileStore: store,
             slotStore: slotStore,
-            desktopAuth: DesktopAuthService(resolver: resolver, keychainEnabled: false),
+            desktopAuth: DesktopAuthService(resolver: resolver),
             resolver: resolver
         )
 
         let target = try await switcher.switchTo(incoming: profile, outgoingActor: nil, incomingActor: actor)
         #expect(target.path == home.appendingPathComponent(".codex/auth.json").path)
         #expect(slotStore.loadActiveID() == profile.id)
+    }
+
+    @Test("Default DesktopAuthService inherits the injected resolver (P1 regression: install path must match read path)")
+    func defaultDesktopAuthInheritsResolver() async throws {
+        let home = Self.tempHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let codexDir = home.appendingPathComponent(".codex", isDirectory: true)
+        try FileManager.default.createDirectory(at: codexDir, withIntermediateDirectories: true)
+        let expectedLiveURL = codexDir.appendingPathComponent("auth.json")
+
+        let resolver = AuthPathResolver(environment: [:], homeDirectory: home)
+        let store = ProfileStore(rootDirectory: home.appendingPathComponent("profiles"))
+        let slotStore = SlotStore(url: home.appendingPathComponent("active-slot.json"))
+        let auth = try Self.makeAuth(user: "u", account: "a", refreshToken: "r")
+        let profile = Profile(label: "Solo", dedupKey: "u::a")
+        try store.insert(profile, snapshot: auth)
+        let actor = PerProfile(profileID: profile.id, snapshotURL: store.snapshotURL(for: profile.id))
+
+        // Build Switcher with ONLY the resolver — no explicit desktopAuth. Before
+        // the fix, this would silently use a default DesktopAuthService that
+        // resolves to the real ~/.codex/auth.json instead of `home/.codex/auth.json`.
+        let switcher = Switcher(profileStore: store, slotStore: slotStore, resolver: resolver)
+        let target = try await switcher.switchTo(incoming: profile, outgoingActor: nil, incomingActor: actor)
+
+        #expect(target.path == expectedLiveURL.path)
+        #expect(FileManager.default.fileExists(atPath: expectedLiveURL.path))
     }
 
     @Test("Switching to the same actor instance throws .sameProfile")
@@ -227,5 +253,61 @@ struct SwitcherTests {
                 incomingActor: f.actorA
             )
         }
+    }
+
+    @Test("Swap proceeds when no live auth.json exists yet (capture-live silently skips)")
+    func swapWithoutPriorLiveFile() async throws {
+        let home = Self.tempHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let resolver = AuthPathResolver(environment: [:], homeDirectory: home)
+        let store = ProfileStore(rootDirectory: home.appendingPathComponent("profiles"))
+        let slotStore = SlotStore(url: home.appendingPathComponent("active-slot.json"))
+
+        let authA = try Self.makeAuth(user: "user-A", account: "acct-A", refreshToken: "rA")
+        let authB = try Self.makeAuth(user: "user-B", account: "acct-B", refreshToken: "rB")
+        let pA = Profile(label: "A", dedupKey: "user-A::acct-A")
+        let pB = Profile(label: "B", dedupKey: "user-B::acct-B")
+        try store.insert(pA, snapshot: authA)
+        try store.insert(pB, snapshot: authB)
+
+        let actorA = PerProfile(profileID: pA.id, snapshotURL: store.snapshotURL(for: pA.id))
+        let actorB = PerProfile(profileID: pB.id, snapshotURL: store.snapshotURL(for: pB.id))
+
+        // No file at ~/.codex/auth.json yet — Switcher must not error on capture-live.
+        let switcher = Switcher(profileStore: store, slotStore: slotStore, resolver: resolver)
+        let target = try await switcher.switchTo(incoming: pB, outgoingActor: actorA, incomingActor: actorB)
+
+        let live = try Snapshotter.read(target)
+        #expect(live.tokens?.refreshToken == "rB")
+        #expect(slotStore.loadActiveID() == pB.id)
+        // A's stored snapshot is untouched (no live data to capture).
+        let postA = try Snapshotter.read(store.snapshotURL(for: pA.id))
+        #expect(postA.tokens?.refreshToken == "rA")
+    }
+
+    @Test("Capture-live failure (live file unreadable) does not abort the swap")
+    func captureLiveFailureIsSwallowed() async throws {
+        let f = try Self.makeFixture()
+        defer { try? FileManager.default.removeItem(at: f.home) }
+
+        // Corrupt the live file so Snapshotter.read throws inside captureLive.
+        try Data("not-json".utf8).write(to: f.liveURL)
+
+        // Swap still proceeds — the install step writes B's snapshot at the live path,
+        // overwriting the corruption. A's stored snapshot stays as it was.
+        _ = try await f.switcher.switchTo(
+            incoming: f.profileB,
+            outgoingActor: f.actorA,
+            incomingActor: f.actorB
+        )
+        let postLive = try Snapshotter.read(f.liveURL)
+        #expect(postLive.tokens?.refreshToken == "rB")
+        #expect(f.slotStore.loadActiveID() == f.profileB.id)
+
+        // A's stored snapshot was not advanced because capture-live failed —
+        // the original stored token survives untouched.
+        let postA = try Snapshotter.read(f.store.snapshotURL(for: f.profileA.id))
+        #expect(postA.tokens?.refreshToken == "rA")
     }
 }

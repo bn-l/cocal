@@ -198,6 +198,56 @@ struct WarmerTests {
         #expect(updated.warning == .refreshRevoked)
     }
 
+    @Test("usage() failure does NOT advance lastWarmed (P2 regression: stale percent must not look fresh)")
+    func usageFailureDoesNotAdvanceFreshness() async throws {
+        let (root, store) = try Self.tempStore()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        // Pin lastWarmed to a known prior value so we can prove it doesn't move.
+        let previouslyWarmed = Date(timeIntervalSince1970: 1_700_000_000)
+        let now = Date(timeIntervalSince1970: floor(Date().timeIntervalSince1970))
+
+        var profile = Profile(label: "stale-data", dedupKey: "u::a")
+        profile.lastWarmed = previouslyWarmed
+        profile.primaryUsedPercent = 42.0  // last successful percent — must be preserved
+        try Self.insert(store, profile: profile, user: "u", account: "a", accessExp: now.addingTimeInterval(3600))
+
+        let session = MockURLProtocol.makeSession()
+        MockURLProtocol.acquireGate(); defer { MockURLProtocol.releaseGate() }
+        MockURLProtocol.setHandler { request in
+            // Refresh isn't called (access token still fresh). Usage fails 503.
+            // Accounts check would also fail; we return 503 across the board so
+            // the warmer's `try?` paths around usage() and accountsCheck() both bail.
+            switch request.url {
+            case BackendConstants.usageURL, BackendConstants.accountCheckURL:
+                return MockURLProtocol.textResponse(url: request.url!, status: 503, body: "service unavailable")
+            default:
+                throw URLError(.unsupportedURL)
+            }
+        }
+
+        let actor = PerProfile(
+            profileID: profile.id,
+            snapshotURL: store.snapshotURL(for: profile.id),
+            backend: BackendClient(session: session),
+            refresher: TokenRefresher(session: session),
+            now: { now }
+        )
+        let updated = await Warmer(store: store, now: { now }).warm(profile: profile, actor: actor)
+
+        // Refresh succeeded, so warning is cleared. But because usage() failed, the
+        // freshness marker MUST stay at the prior timestamp — AutoSwitchPicker
+        // gates candidacy on `lastWarmed >= cutoff`, so leaving it untouched is
+        // what excludes this profile from auto-switch consideration.
+        #expect(updated.warning == nil)
+        #expect(updated.lastWarmed == previouslyWarmed)
+        #expect(updated.primaryUsedPercent == 42.0)
+
+        let reloaded = store.loadAll().first { $0.id == profile.id }
+        #expect(reloaded?.lastWarmed == previouslyWarmed)
+        #expect(reloaded?.primaryUsedPercent == 42.0)
+    }
+
     @Test("Warmer never writes to the live ~/.codex/auth.json")
     func neverWritesLiveAuth() async throws {
         let (root, store) = try Self.tempStore()

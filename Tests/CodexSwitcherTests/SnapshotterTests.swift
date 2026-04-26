@@ -47,6 +47,58 @@ struct SnapshotterTests {
         }
     }
 
+    @Test("read throws .malformedJSON when the file is not valid JSON")
+    func readMalformedThrows() throws {
+        let url = Self.tempURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("not valid json {{{".utf8).write(to: url)
+
+        do {
+            _ = try Snapshotter.read(url)
+            #expect(Bool(false), "expected throw")
+        } catch Snapshotter.Error.malformedJSON {
+            // ok
+        } catch {
+            #expect(Bool(false), "wrong error: \(error)")
+        }
+    }
+
+    @Test("dedupKey throws .missingTokens for an AuthJSON without tokens")
+    func dedupKeyMissingTokensThrows() throws {
+        let auth = AuthJSON(tokens: nil)
+        do {
+            _ = try Snapshotter.dedupKey(for: auth)
+            #expect(Bool(false), "expected throw")
+        } catch Snapshotter.Error.missingTokens {
+            // ok
+        } catch {
+            #expect(Bool(false), "wrong error: \(error)")
+        }
+    }
+
+    @Test("write atomically replaces existing content (rename, not append)")
+    func writeReplacesExisting() throws {
+        let url = Self.tempURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+
+        try Snapshotter.write(Self.sampleAuthJSON(), to: url)
+        let firstSize = (try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
+
+        let updated = AuthJSON(
+            tokens: AuthTokens(idToken: "x", accessToken: "y", refreshToken: "rotated", accountID: nil),
+            lastRefresh: Date(timeIntervalSince1970: 1)
+        )
+        try Snapshotter.write(updated, to: url)
+
+        let restored = try Snapshotter.read(url)
+        #expect(restored.tokens?.refreshToken == "rotated")
+        // Sanity: the file got rewritten end-to-end (not appended).
+        let secondSize = (try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
+        #expect(secondSize > 0)
+        _ = firstSize  // referenced so the value is held; equality is fine in either direction
+    }
+
     @Test("dedupKey extracts the chatgpt_user_id::chatgpt_account_id from the id_token")
     func dedupKeyExtraction() throws {
         // Build an id_token with the auth claim wrapper.

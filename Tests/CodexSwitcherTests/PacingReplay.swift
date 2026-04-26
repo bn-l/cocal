@@ -90,7 +90,7 @@ struct PacingReplayObservation: Codable, Sendable, Equatable {
     let calibrator: Double
     let sessionDeviation: Double
     let dailyDeviation: Double
-    let dailyBudgetRemaining: Double
+    let dailyBudgetRemaining: Double?
     let exchangeRate: Double?
     let debug: PacingDecisionBreakdown
 }

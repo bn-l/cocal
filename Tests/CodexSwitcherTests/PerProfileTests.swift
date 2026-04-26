@@ -224,6 +224,159 @@ struct PerProfileTests {
         let after = try await actor.readSnapshot()
         #expect(after.tokens?.refreshToken == "current")
     }
+
+    // MARK: - Refresh failure must not corrupt the on-disk snapshot
+
+    @Test("Refresh failure (4xx with reused token): snapshot on disk is unchanged")
+    func refreshFailureLeavesSnapshotIntact() async throws {
+        let snapURL = try Self.tempSnapshot(Date().addingTimeInterval(-3600))
+        defer { try? FileManager.default.removeItem(at: snapURL.deletingLastPathComponent()) }
+
+        let pre = try Snapshotter.read(snapURL)
+        let priorRefresh = pre.tokens?.refreshToken
+        let priorLastRefresh = pre.lastRefresh
+
+        let session = MockURLProtocol.makeSession()
+        MockURLProtocol.acquireGate(); defer { MockURLProtocol.releaseGate() }
+        MockURLProtocol.setHandler { request in
+            #expect(request.url == BackendConstants.tokenRefreshURL)
+            return MockURLProtocol.textResponse(
+                url: request.url!,
+                status: 400,
+                body: #"{"error":"refresh_token_reused"}"#
+            )
+        }
+
+        let actor = PerProfile(
+            profileID: "p", snapshotURL: snapURL,
+            backend: BackendClient(session: session),
+            refresher: TokenRefresher(session: session)
+        )
+        do {
+            _ = try await actor.refreshIfNeeded()
+            #expect(Bool(false), "expected refresh to throw")
+        } catch let BackendError.refreshFailure(reason) {
+            #expect(reason == .exhausted)
+        } catch {
+            #expect(Bool(false), "wrong error: \(error)")
+        }
+
+        // On-disk snapshot is untouched — we never persisted partial/empty rotated tokens.
+        let post = try Snapshotter.read(snapURL)
+        #expect(post.tokens?.refreshToken == priorRefresh)
+        #expect(post.lastRefresh == priorLastRefresh)
+    }
+
+    @Test("usage() propagates BackendError.refreshFailure when the refresh step fails (caller can classify the warning)")
+    func usagePropagatesRefreshFailure() async throws {
+        let snapURL = try Self.tempSnapshot(Date().addingTimeInterval(-3600))
+        defer { try? FileManager.default.removeItem(at: snapURL.deletingLastPathComponent()) }
+
+        let session = MockURLProtocol.makeSession()
+        MockURLProtocol.acquireGate(); defer { MockURLProtocol.releaseGate() }
+        MockURLProtocol.setHandler { request in
+            // refreshIfNeeded fires before the usage GET; classify and bail.
+            return MockURLProtocol.textResponse(
+                url: request.url!,
+                status: 400,
+                body: #"{"error":"refresh_token_expired"}"#
+            )
+        }
+
+        let actor = PerProfile(
+            profileID: "p", snapshotURL: snapURL,
+            backend: BackendClient(session: session),
+            refresher: TokenRefresher(session: session)
+        )
+        do {
+            _ = try await actor.usage()
+            #expect(Bool(false), "expected throw")
+        } catch let BackendError.refreshFailure(reason) {
+            #expect(reason == .expired)
+        } catch {
+            #expect(Bool(false), "wrong error: \(error)")
+        }
+    }
+
+    @Test("Single-flight: while a refresh-driven usage() is in flight, a second usage() reuses it (one rotation only)")
+    func usageCoalescesAroundRefresh() async throws {
+        let snapURL = try Self.tempSnapshot(Date().addingTimeInterval(-3600))
+        defer { try? FileManager.default.removeItem(at: snapURL.deletingLastPathComponent()) }
+
+        let session = MockURLProtocol.makeSession()
+        let refreshCount = AtomicCounter()
+        let usageCount = AtomicCounter()
+        MockURLProtocol.acquireGate(); defer { MockURLProtocol.releaseGate() }
+        let newAccess = try Self.idToken(exp: Date().addingTimeInterval(3600))
+        MockURLProtocol.setHandler { request in
+            if request.url == BackendConstants.tokenRefreshURL {
+                refreshCount.increment()
+                Thread.sleep(forTimeInterval: 0.05)
+                return try MockURLProtocol.jsonResponse(url: request.url!, json: [
+                    "access_token": newAccess,
+                    "refresh_token": "ROTATED-ONCE",
+                    "id_token": newAccess,
+                    "token_type": "Bearer",
+                    "expires_in": 3600,
+                    "scope": "openid",
+                ])
+            }
+            usageCount.increment()
+            Thread.sleep(forTimeInterval: 0.05)
+            return try MockURLProtocol.jsonResponse(url: request.url!, json: [
+                "primary": ["used_percent": 5.0],
+            ])
+        }
+
+        let actor = PerProfile(
+            profileID: "p", snapshotURL: snapURL,
+            backend: BackendClient(session: session),
+            refresher: TokenRefresher(session: session)
+        )
+
+        async let r1 = actor.usage()
+        async let r2 = actor.usage()
+        async let r3 = actor.usage()
+        _ = try await (r1, r2, r3)
+
+        // Single-use refresh-token rotation safety: only ONE refresh, only ONE usage call.
+        #expect(refreshCount.value == 1)
+        #expect(usageCount.value == 1)
+
+        // The single rotation persisted exactly once.
+        let onDisk = try Snapshotter.read(snapURL)
+        #expect(onDisk.tokens?.refreshToken == "ROTATED-ONCE")
+    }
+
+    @Test("captureLive overwrites the snapshot with the live file's contents")
+    func captureLiveOverwritesSnapshot() async throws {
+        let snapURL = try Self.tempSnapshot(Date().addingTimeInterval(3600))
+        defer { try? FileManager.default.removeItem(at: snapURL.deletingLastPathComponent()) }
+        let liveURL = snapURL.deletingLastPathComponent().appendingPathComponent("live.json")
+        let token = try Self.idToken(exp: Date().addingTimeInterval(3600))
+        let liveAuth = AuthJSON(
+            tokens: AuthTokens(idToken: token, accessToken: token, refreshToken: "LIVE-RT", accountID: "a"),
+            lastRefresh: Date()
+        )
+        try Snapshotter.write(liveAuth, to: liveURL)
+
+        let actor = PerProfile(profileID: "p", snapshotURL: snapURL)
+        try await actor.captureLive(from: liveURL)
+
+        let onDisk = try Snapshotter.read(snapURL)
+        #expect(onDisk.tokens?.refreshToken == "LIVE-RT")
+    }
+
+    @Test("captureLive throws when the live file is missing (caller decides whether to swallow)")
+    func captureLiveMissingFileThrows() async throws {
+        let snapURL = try Self.tempSnapshot(Date().addingTimeInterval(3600))
+        defer { try? FileManager.default.removeItem(at: snapURL.deletingLastPathComponent()) }
+        let nonexistent = snapURL.deletingLastPathComponent().appendingPathComponent("nope.json")
+        let actor = PerProfile(profileID: "p", snapshotURL: snapURL)
+        await #expect(throws: Snapshotter.Error.self) {
+            try await actor.captureLive(from: nonexistent)
+        }
+    }
 }
 
 /// Thread-safe counter used by URLProtocol handler closures, which run on

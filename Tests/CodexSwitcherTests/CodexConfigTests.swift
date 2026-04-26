@@ -60,12 +60,15 @@ struct CodexConfigClassifyTests {
         #expect(CodexConfig.classify("cli_auth_credentials_store = \"hsm\"\n") == .unset)
     }
 
-    @Test("StorageMode.needsFileMode")
+    @Test("StorageMode.needsFileMode (unset is treated as .file because Codex's documented default is file)")
     func needsFileModeFlag() {
+        // Per openai/codex `codex-rs/config/src/types.rs`, the enum's #[default] is File.
+        // Absence of the key in config.toml therefore resolves to file mode, so the
+        // popover prompt should NOT fire on .unset — it would be a false alarm.
         #expect(CodexConfig.StorageMode.file.needsFileMode == false)
+        #expect(CodexConfig.StorageMode.unset.needsFileMode == false)
         #expect(CodexConfig.StorageMode.keyring.needsFileMode == true)
         #expect(CodexConfig.StorageMode.auto.needsFileMode == true)
-        #expect(CodexConfig.StorageMode.unset.needsFileMode == true)
     }
 }
 
@@ -177,5 +180,47 @@ struct CodexConfigSwitchTests {
         #expect(cfg.detectMode() == .file)
         #expect(out.contains("other = 42"))
         #expect(out.contains("# comment"))
+    }
+
+    @Test("Idempotent: switching when already file-mode preserves byte content")
+    func idempotentSwitch() throws {
+        let dir = Self.makeTemp()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("config.toml")
+        let initial = """
+        # header line
+        cli_auth_credentials_store = "file"
+        other = 42
+
+        [profiles.foo]
+        x = 1
+        """
+        try initial.data(using: .utf8)!.write(to: url)
+
+        let cfg = CodexConfig(configURL: url)
+        try cfg.switchToFileMode()
+        try cfg.switchToFileMode()
+
+        // Final file is still classified as .file, contains all the original keys
+        // and exactly one occurrence of cli_auth_credentials_store.
+        let out = try String(contentsOf: url, encoding: .utf8)
+        #expect(cfg.detectMode() == .file)
+        #expect(out.contains("# header line"))
+        #expect(out.contains("[profiles.foo]"))
+        #expect(out.contains("other = 42"))
+        let count = out.components(separatedBy: "cli_auth_credentials_store").count - 1
+        #expect(count == 1)
+    }
+
+    @Test("Creates parent dir when ~/.codex doesn't exist yet (fresh box)")
+    func createsParentDir() throws {
+        let dir = Self.makeTemp()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        // Note: parent dir is intentionally NOT pre-created.
+        let nested = dir.appendingPathComponent("brand-new-codex").appendingPathComponent("config.toml")
+        let cfg = CodexConfig(configURL: nested)
+        try cfg.switchToFileMode()
+        #expect(FileManager.default.fileExists(atPath: nested.path))
+        #expect(cfg.detectMode() == .file)
     }
 }

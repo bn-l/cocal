@@ -229,7 +229,8 @@ struct OptimiserSessionTargetTests {
             weeklyUsage: 50, weeklyRemaining: 5040
         )
         #expect(approxEqual(result.weeklyDeviation, 0))
-        #expect(result.target == 100)
+        // Floating-point: the kernel's target arithmetic occasionally lands a few ULPs short of 100.
+        #expect(approxEqual(result.target, 100))
     }
 
     @Test("Target never drops below 10")
@@ -795,5 +796,78 @@ struct OptimiserSessionDeviationTests {
         #expect(below.sessionDeviation == 0)
         #expect(above.sessionDeviation > 0)
         #expect(above.sessionDeviation > below.sessionDeviation)
+    }
+}
+
+// MARK: - Daily Budget — fresh-import semantics
+
+/// Issue 3 (red): on a fresh import the popover currently shows "Daily Budget
+/// 100%". With no daily snapshot baseline yet, the kernel cannot compute a
+/// meaningful daily budget — it should report `nil` so the UI can render "—"
+/// instead of confidently claiming a full budget remains. A 100% reading is
+/// indistinguishable from "all consumed" in the user's reading of the gauge,
+/// and on a profile that already has weekly usage it's outright wrong.
+@Suite("UsageOptimiser — Daily Budget on fresh data")
+@MainActor
+struct OptimiserDailyBudgetFreshImportTests {
+
+    @Test("First poll ever (no prior snapshot): dailyBudgetRemaining is nil")
+    func firstPollHasNoBudget() {
+        let opt = makeTestOptimiser()
+        let result = opt.recordPoll(
+            sessionUsage: 30, sessionRemaining: 200,
+            weeklyUsage: 47, weeklyRemaining: 5000
+        )
+        // Pre-fix: returns 1.0 (claims "100% of daily budget remaining" with
+        // no actual data to back it up). Post-fix: nil.
+        #expect(result.dailyBudgetRemaining == nil)
+    }
+
+    @Test("Snapshot present but no usage growth yet: still nil (no trend to gauge)")
+    func snapshotButNoGrowthIsNil() {
+        let now = Date()
+        var data = makeStoreData(
+            polls: [(now.addingTimeInterval(-3600), 0, 290, 47, 5060)],
+            sessions: [(now.addingTimeInterval(-3600), 47, 5060)]
+        )
+        data.dailySnapshot = DailySnapshot(
+            date: now.addingTimeInterval(-3600),
+            weeklyUsagePct: 47,
+            weeklyMinsLeft: 5060
+        )
+        let opt = makeTestOptimiser(data: data)
+        let result = opt.recordPoll(
+            sessionUsage: 0, sessionRemaining: 280,
+            weeklyUsage: 47, weeklyRemaining: 5000,
+            timestamp: now
+        )
+        // dailyDelta = 0 → no signal. UI must show "—" rather than 100%.
+        #expect(result.dailyBudgetRemaining == nil)
+    }
+
+    @Test("Snapshot + actual usage growth: dailyBudgetRemaining is a real fraction")
+    func growthProducesRealBudget() {
+        let now = Date()
+        var data = makeStoreData(
+            polls: [(now.addingTimeInterval(-3600), 0, 290, 40, 5060)],
+            sessions: [(now.addingTimeInterval(-3600), 40, 5060)]
+        )
+        data.dailySnapshot = DailySnapshot(
+            date: now.addingTimeInterval(-3600),
+            weeklyUsagePct: 40,
+            weeklyMinsLeft: 5060
+        )
+        let opt = makeTestOptimiser(data: data)
+        let result = opt.recordPoll(
+            sessionUsage: 20, sessionRemaining: 200,
+            weeklyUsage: 45, weeklyRemaining: 5000,
+            timestamp: now
+        )
+        // weeklyUsage moved 40 → 45 → real signal → real number
+        #expect(result.dailyBudgetRemaining != nil)
+        if let value = result.dailyBudgetRemaining {
+            #expect(value >= 0)
+            #expect(value <= 1)
+        }
     }
 }
