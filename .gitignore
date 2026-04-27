@@ -81,8 +81,9 @@ Packages/
 Package.resolved
 build/
 DerivedData/
-*.xcodeproj/xcuserdata/
-*.xcworkspace/xcuserdata/
+*.xcodeproj/
+*.xcworkspace/
+buildServer.json
 xcuserdata/
 *.xcuserstate
 *.hmap
