@@ -411,6 +411,7 @@ struct AppConfig: Codable, Sendable {
     var autoSwitchThresholdPercent: Double = 90
     var autoSwitchMinSessionMinutesLeft: Double = 30
     var warmerIntervalSeconds: TimeInterval = 7 * 24 * 60 * 60
+    var verboseLogging: Bool = false
 
     init(
         activeHoursPerDay: [Double] = [10, 10, 10, 10, 10, 10, 10],
@@ -419,7 +420,8 @@ struct AppConfig: Codable, Sendable {
         autoSwitchEnabled: Bool = false,
         autoSwitchThresholdPercent: Double = 90,
         autoSwitchMinSessionMinutesLeft: Double = 30,
-        warmerIntervalSeconds: TimeInterval = 7 * 24 * 60 * 60
+        warmerIntervalSeconds: TimeInterval = 7 * 24 * 60 * 60,
+        verboseLogging: Bool = false
     ) {
         self.activeHoursPerDay = activeHoursPerDay
         self.pollIntervalSeconds = pollIntervalSeconds
@@ -428,6 +430,7 @@ struct AppConfig: Codable, Sendable {
         self.autoSwitchThresholdPercent = autoSwitchThresholdPercent
         self.autoSwitchMinSessionMinutesLeft = autoSwitchMinSessionMinutesLeft
         self.warmerIntervalSeconds = warmerIntervalSeconds
+        self.verboseLogging = verboseLogging
     }
 
     init(from decoder: Decoder) throws {
@@ -439,6 +442,7 @@ struct AppConfig: Codable, Sendable {
         autoSwitchThresholdPercent = try container.decodeIfPresent(Double.self, forKey: .autoSwitchThresholdPercent) ?? 90
         autoSwitchMinSessionMinutesLeft = try container.decodeIfPresent(Double.self, forKey: .autoSwitchMinSessionMinutesLeft) ?? 30
         warmerIntervalSeconds = try container.decodeIfPresent(TimeInterval.self, forKey: .warmerIntervalSeconds) ?? 7 * 24 * 60 * 60
+        verboseLogging = try container.decodeIfPresent(Bool.self, forKey: .verboseLogging) ?? false
     }
 
     private static let configURL = Migration.appSupportDirectory
