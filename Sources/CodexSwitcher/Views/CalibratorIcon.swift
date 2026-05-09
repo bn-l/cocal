@@ -18,7 +18,7 @@ struct CalibratorIcon: View {
     var needsRestart = false
 
     /// Total icon edge in pixels.
-    private static let iconSize: CGFloat = 19
+    private static let iconSize: CGFloat = 18
 
     var body: some View {
         if hasError {
@@ -86,7 +86,7 @@ struct CalibratorIcon: View {
                 return true
             }
 
-            let gap: CGFloat = 1
+            let gap: CGFloat = 2
             let barWidth = (size - gap) / 2
             let centerY = size / 2
             let maxExtent = size / 2

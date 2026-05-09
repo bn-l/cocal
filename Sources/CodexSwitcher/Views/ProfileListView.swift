@@ -83,9 +83,14 @@ struct ProfileListView: View {
                         isActive: profile.id == activeID,
                         inFlight: inFlight,
                         onSelect: { activate(profile) },
-                        onRemove: { pendingRemoval = profile }
+                        onRemove: { pendingRemoval = profile },
+                        onWarning: { warning in showWarning(profile: profile, warning: warning) }
                     )
                 }
+            }
+
+            if let pendingRemoval {
+                pendingRemovalConfirmation(pendingRemoval)
             }
 
             if let status = importStatus {
@@ -113,40 +118,58 @@ struct ProfileListView: View {
         }
         .animation(.easeInOut(duration: 0.3), value: monitor.importStatus)
         .onAppear { reload() }
-        .confirmationDialog(
-            "Remove profile?",
-            isPresented: Binding(
-                get: { pendingRemoval != nil },
-                set: { if !$0 { pendingRemoval = nil } }
-            ),
-            presenting: pendingRemoval
-        ) { profile in
-            Button("Remove \(profile.label)", role: .destructive) {
-                remove(profile)
-            }
-            .pointerCursor()
-            Button("Cancel", role: .cancel) {
-                pendingRemoval = nil
-            }
-            .pointerCursor()
-        } message: { profile in
-            Text("This deletes the stored credentials for \(profile.label).")
-        }
     }
 
     private var emptyState: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("No Codex profiles yet.")
                 .font(.subheadline)
-            Text("Run `codex login`, then click Import credentials below.")
+            Text("Click Import credentials below. If no live credentials are found, sign in with Codex first.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
         .padding(.vertical, 8)
     }
 
+    private func pendingRemovalConfirmation(_ profile: Profile) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Remove \(profile.label)?")
+                .font(.caption)
+                .fontWeight(.semibold)
+            Text("This deletes the stored credentials for this profile.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 8) {
+                Button("Remove", role: .destructive) {
+                    remove(profile)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .pointerCursor()
+
+                Button("Cancel") {
+                    pendingRemoval = nil
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .pointerCursor()
+            }
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+    }
+
     private func reload() {
         monitor.reloadProfiles()
+    }
+
+    private func showWarning(profile: Profile, warning: ProfileWarning) {
+        monitor.showImportStatus(.init(
+            message: "\(profile.label): \(warning.humanDescription)",
+            isError: true
+        ), autoDismissAfter: 12.0)
     }
 
     private func runImport() {
@@ -161,19 +184,21 @@ struct ProfileListView: View {
                 let (outcome, auth) = try importer.runImport()
                 switch outcome {
                 case .imported(let profile):
+                    flog("ProfileList", "Import outcome: imported \(profile.label) id=\(profile.id)")
                     monitor.showImportStatus(.init(
                         message: "Imported \(profile.label).",
                         isError: false
                     ))
-                    if env.slotStore.loadActiveID() == nil {
-                        try? env.slotStore.setActiveID(profile.id)
-                    }
+                    try? env.slotStore.setActiveID(profile.id)
                 case .duplicate(let existing):
+                    flog("ProfileList", "Import outcome: duplicate \(existing.label) id=\(existing.id)")
                     monitor.showImportStatus(.init(
-                        message: "No new credentials. \(existing.label) already imported — run `codex login` for a different ChatGPT account and click Import again.",
+                        message: "\(existing.label) already imported. Activated existing profile. For a new profile, sign in with a different ChatGPT account and import again.",
                         isError: false
                     ))
+                    try? env.slotStore.setActiveID(existing.id)
                 case .refreshed(let existing):
+                    flog("ProfileList", "Import outcome: refreshed \(existing.label) id=\(existing.id)")
                     // Route the write through the PerProfile actor so it
                     // serializes with any concurrent Warmer refresh and
                     // invalidates the actor's HTTPS cache.
@@ -183,6 +208,7 @@ struct ProfileListView: View {
                         message: "Refreshed snapshot for \(existing.label).",
                         isError: false
                     ))
+                    try? env.slotStore.setActiveID(existing.id)
                 }
                 reload()
                 // manualPoll re-runs `poll()`, which clears `noProfileImported`
@@ -192,7 +218,7 @@ struct ProfileListView: View {
                 await monitor.manualPoll()
             } catch Importer.ImportError.noLiveAuth {
                 monitor.showImportStatus(.init(
-                    message: "No `auth.json` found. Run `codex login` first.",
+                    message: "No auth.json found. Sign in with Codex first, then import.",
                     isError: true
                 ))
             } catch let Importer.ImportError.malformed(detail) {
@@ -202,7 +228,7 @@ struct ProfileListView: View {
                 ))
             } catch Importer.ImportError.missingDedupClaims {
                 monitor.showImportStatus(.init(
-                    message: "Live auth.json is missing chatgpt_user_id / chatgpt_account_id claims. Re-run `codex login`.",
+                    message: "Live auth.json is missing chatgpt_user_id / chatgpt_account_id claims. Sign in with Codex again.",
                     isError: true
                 ))
             } catch {
@@ -234,6 +260,7 @@ struct ProfileListView: View {
                 await monitor.manualPoll()
             } catch {
                 logger.error("Switch failed: \(String(describing: error), privacy: .public)")
+                flog("ProfileList", "Switch failed: \(error)")
                 monitor.showImportStatus(.init(
                     message: "Switch failed: \(error.localizedDescription)",
                     isError: true
@@ -270,6 +297,7 @@ private struct ProfileRow: View {
     let inFlight: Bool
     let onSelect: () -> Void
     let onRemove: () -> Void
+    let onWarning: (ProfileWarning) -> Void
 
     var body: some View {
         HStack(spacing: 8) {
@@ -315,9 +343,15 @@ private struct ProfileRow: View {
     @ViewBuilder
     private var statusIndicator: some View {
         if let warning = profile.warning {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange)
-                .help(warning.humanDescription)
+            Button {
+                onWarning(warning)
+            } label: {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+            }
+            .buttonStyle(.plain)
+            .pointerCursor()
+            .help(warning.humanDescription)
         } else if isActive {
             Image(systemName: "circle.inset.filled")
                 .foregroundStyle(Color.accentColor)
@@ -330,6 +364,7 @@ private struct ProfileRow: View {
     }
 
     private var utilizationText: String {
+        if profile.warning != nil { return "usage stale" }
         let session = profile.primaryUsedPercent.map { String(format: "%.0f%%", $0) } ?? "—"
         let weekly = profile.secondaryUsedPercent.map { String(format: "%.0f%%", $0) } ?? "—"
         return "5h \(session) · wk \(weekly)"

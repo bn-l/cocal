@@ -8,6 +8,7 @@ struct PopoverView: View {
     @State private var keyringMode: CodexConfig.StorageMode = .file
     @State private var showKeyringPrompt = false
     @State private var keyringRewriteError: String?
+    @State private var restartDismissTask: Task<Void, Never>?
 
     /// PLAN.md Appendix A specifies the Profiles section sits inline between
     /// metrics and the footer — not behind a separate page. Test anchor for
@@ -91,29 +92,27 @@ struct PopoverView: View {
                 .foregroundStyle(.tertiary)
                 .help("View stats")
                 Spacer(minLength: 0)
-                HStack(spacing: 4) {
-                    Text("Auto switch:")
-                        .font(.caption2)
-                    Toggle("", isOn: $monitor.autoSwitchEnabled)
-                        .toggleStyle(.checkbox)
-                        .labelsHidden()
-                        .controlSize(.mini)
-                }
-                .pointerCursor()
-                .help(monitor.autoSwitchEnabled ? "Auto-switch on (click to disable)" : "Auto-switch off (click to enable)")
-                if monitor.needsRestart {
-                    Spacer(minLength: 0)
-                    Button {
-                        monitor.clearNeedsRestart()
-                    } label: {
-                        Label("Restart Codex", systemImage: "arrow.triangle.2.circlepath")
-                            .font(.caption2)
-                    }
-                    .buttonStyle(.plain)
+                Toggle("Auto switch", isOn: $monitor.autoSwitchEnabled)
+                    .toggleStyle(.button)
+                    .controlSize(.mini)
+                    .tint(monitor.autoSwitchEnabled ? .green : .gray)
+                    .foregroundStyle(monitor.autoSwitchEnabled ? Color.primary : Color.secondary)
+                    .font(.caption2)
                     .pointerCursor()
-                    .foregroundStyle(.orange)
-                    .help("Restart any running Codex CLI / Codex.app to pick up the new credentials, then click to dismiss.")
+                    .help(monitor.autoSwitchEnabled ? "Auto-switch on (click to disable)" : "Auto-switch off (click to enable)")
+                Spacer(minLength: 0)
+                Button {
+                    monitor.verboseLogging.toggle()
+                } label: {
+                    Image(systemName: monitor.verboseLogging
+                        ? "text.document.fill"
+                        : "text.document")
                 }
+                .buttonStyle(.plain)
+                .pointerCursor()
+                .font(.caption2)
+                .foregroundStyle(monitor.verboseLogging ? .primary : .tertiary)
+                .help(monitor.verboseLogging ? "Verbose file logging on (~/Library/Application Support/codex-switcher/debug.log)" : "Enable verbose file logging")
                 Spacer(minLength: 0)
                 Button("Quit") {
                     NSApplication.shared.terminate(nil)
@@ -123,7 +122,20 @@ struct PopoverView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             }
+
+            if monitor.needsRestart {
+                HStack(spacing: 6) {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .foregroundStyle(.orange)
+                    Text("Restart Codex to pick up the new credentials.")
+                        .foregroundStyle(.secondary)
+                }
+                .font(.caption)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
         }
+        .animation(.easeInOut(duration: 0.3), value: monitor.needsRestart)
         .padding(16)
         .frame(width: 320)
         .task {
@@ -147,6 +159,16 @@ struct PopoverView: View {
         }
         .onChange(of: monitor.hasError) { _, hasError in
             if !hasError { showingErrors = false }
+        }
+        .onChange(of: monitor.needsRestart) { _, needs in
+            restartDismissTask?.cancel()
+            if needs {
+                restartDismissTask = Task { @MainActor in
+                    try? await Task.sleep(for: .seconds(10))
+                    guard !Task.isCancelled else { return }
+                    monitor.clearNeedsRestart()
+                }
+            }
         }
         .alert("Pin Codex to file storage", isPresented: $showKeyringPrompt) {
             Button("Pin to file mode") {
@@ -212,8 +234,6 @@ struct PopoverView: View {
 
                 ProfileListView(monitor: monitor)
             }
-        } else if let metrics = monitor.metrics {
-            MetricsView(metrics: metrics)
         } else if monitor.hasError {
             VStack(spacing: 8) {
                 Image(systemName: "exclamationmark.triangle")
@@ -225,6 +245,8 @@ struct PopoverView: View {
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 20)
+        } else if let metrics = monitor.metrics {
+            MetricsView(metrics: metrics)
         } else {
             ProgressView("Loading...")
                 .frame(maxWidth: .infinity)

@@ -36,6 +36,23 @@ struct AutoSwitchStyleTests {
                 "Auto-switch Toggle must use .tint(...) for a non-default colour. Block: \n\(block)")
     }
 
+    @Test("Auto-switch Toggle is grey when disabled and green only when enabled")
+    func toggleIsGreyWhenDisabled() throws {
+        let src = try Self.popoverSource()
+        guard let range = src.range(of: "Toggle(\"Auto switch\"") else {
+            Issue.record("Auto-switch Toggle not found in PopoverView.swift")
+            return
+        }
+        let block = String(src[range.lowerBound...].prefix(800))
+        #expect(!block.contains(".tint(.green)"),
+                "Auto-switch must not be hard-coded green while disabled. Block: \n\(block)")
+        #expect(block.contains("monitor.autoSwitchEnabled ? .green : .gray")
+                || block.contains("monitor.autoSwitchEnabled ? .green : .secondary"),
+                "Auto-switch tint should be conditional on monitor.autoSwitchEnabled. Block: \n\(block)")
+        #expect(block.contains(".foregroundStyle("),
+                "Auto-switch text/chrome should be explicitly greyed while disabled. Block: \n\(block)")
+    }
+
     @Test("Auto-switch Toggle uses .controlSize(.mini) for smaller text")
     func toggleUsesMiniControlSize() throws {
         let src = try Self.popoverSource()
