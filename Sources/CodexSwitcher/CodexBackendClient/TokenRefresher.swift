@@ -39,6 +39,7 @@ public final class TokenRefresher: Sendable {
             (data, response) = try await session.data(for: request)
         } catch {
             logger.error("Transport error refreshing token: \(String(describing: error), privacy: .public)")
+            flog("TokenRefresher", "Transport error: \(error)")
             throw BackendError.transport(String(describing: error))
         }
 
@@ -57,6 +58,7 @@ public final class TokenRefresher: Sendable {
         let bodyString = String(data: data, encoding: .utf8) ?? ""
         let reason = Self.classifyFailure(status: http.statusCode, body: bodyString)
         logger.warning("Refresh failed: status=\(http.statusCode) reason=\(reason.rawValue, privacy: .public)")
+        flog("TokenRefresher", "Refresh failed: status=\(http.statusCode) reason=\(reason.rawValue)")
         throw BackendError.refreshFailure(reason)
     }
 

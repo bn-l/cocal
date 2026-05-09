@@ -130,6 +130,31 @@ struct BackendModelsTests {
         #expect(resp.accountOrdering == ["acct-1"])
     }
 
+    @Test("AccountsCheckResponse decodes the real accounts object shape")
+    func decodesAccountsObjectShape() throws {
+        let json = Data("""
+        {
+          "accounts": {
+            "default": {
+              "account": {
+                "account_id": "acct-1",
+                "is_deactivated": false,
+                "name": "Personal",
+                "role": "owner"
+              },
+              "entitlement": {
+                "subscription_plan": "pro_5x"
+              }
+            }
+          }
+        }
+        """.utf8)
+
+        let resp = try backendJSONDecoder().decode(AccountsCheckResponse.self, from: json)
+        #expect(resp.accounts?.first?.accountID == "acct-1")
+        #expect(resp.accounts?.first?.planType == "pro_5x")
+    }
+
     @Test("TokenResponse decodes a standard OAuth refresh result")
     func decodesTokenResponse() throws {
         let json = Data("""

@@ -40,6 +40,7 @@ public enum BackendConstants {
 public struct UsageResponse: Codable, Sendable, Equatable {
     public let primary: UsageWindow?
     public let secondary: UsageWindow?
+    public let planType: String?
 
     /// Canonical shape: `rate_limit` (singular) wrapping `primary_window` /
     /// `secondary_window`.
@@ -52,6 +53,7 @@ public struct UsageResponse: Codable, Sendable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case primary
         case secondary
+        case planType = "plan_type"
         case rateLimit = "rate_limit"
         case rateLimits = "rate_limits"
     }
@@ -167,6 +169,71 @@ public struct AccountsCheckResponse: Codable, Sendable, Equatable {
         case accountOrdering = "account_ordering"
         case account
     }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.accountOrdering = try? c.decodeIfPresent([String].self, forKey: .accountOrdering)
+        self.account = try? c.decodeIfPresent(Account.self, forKey: .account)
+
+        if let list = try? c.decodeIfPresent([Account].self, forKey: .accounts) {
+            self.accounts = list
+            return
+        }
+
+        if let buckets = try? c.decodeIfPresent([String: AccountBucket].self, forKey: .accounts) {
+            let normalized = buckets.compactMapValues(\.normalizedAccount)
+            if !normalized.isEmpty {
+                self.accounts = Self.ordered(normalized, ordering: accountOrdering)
+                return
+            }
+        }
+
+        if let dict = try? c.decodeIfPresent([String: Account].self, forKey: .accounts) {
+            self.accounts = Self.ordered(dict, ordering: accountOrdering)
+            return
+        }
+
+        self.accounts = nil
+    }
+
+    private static func ordered(_ dict: [String: Account], ordering: [String]?) -> [Account] {
+        guard let ordering, !ordering.isEmpty else {
+            return dict.keys.sorted().compactMap { dict[$0] }
+        }
+        let ordered = ordering.compactMap { dict[$0] }
+        let remaining = dict.keys
+            .filter { !ordering.contains($0) }
+            .sorted()
+            .compactMap { dict[$0] }
+        return ordered + remaining
+    }
+
+    private struct AccountBucket: Decodable {
+        let account: Account?
+        let entitlement: Entitlement?
+
+        var normalizedAccount: Account? {
+            guard let account else { return nil }
+            guard account.planType == nil, let plan = entitlement?.subscriptionPlan else {
+                return account
+            }
+            return Account(
+                accountID: account.accountID,
+                planType: plan,
+                isDeactivated: account.isDeactivated,
+                role: account.role,
+                name: account.name
+            )
+        }
+    }
+
+    private struct Entitlement: Decodable {
+        let subscriptionPlan: String?
+
+        private enum CodingKeys: String, CodingKey {
+            case subscriptionPlan = "subscription_plan"
+        }
+    }
 }
 
 public struct Account: Codable, Sendable, Equatable {
@@ -182,6 +249,20 @@ public struct Account: Codable, Sendable, Equatable {
         case isDeactivated = "is_deactivated"
         case role
         case name
+    }
+
+    public init(
+        accountID: String?,
+        planType: String?,
+        isDeactivated: Bool?,
+        role: String?,
+        name: String?
+    ) {
+        self.accountID = accountID
+        self.planType = planType
+        self.isDeactivated = isDeactivated
+        self.role = role
+        self.name = name
     }
 }
 

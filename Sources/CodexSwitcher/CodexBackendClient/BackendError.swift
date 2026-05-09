@@ -1,7 +1,7 @@
 import Foundation
 
 /// Errors surfaced by the Codex HTTPS backend client and the OAuth token refresher.
-public enum BackendError: Error, Sendable, Equatable {
+public enum BackendError: Error, Sendable, Equatable, LocalizedError {
     /// The HTTP status was non-2xx; carries the status code and any body string for diagnostics.
     case http(status: Int, body: String?)
 
@@ -17,6 +17,22 @@ public enum BackendError: Error, Sendable, Equatable {
 
     /// Network transport error (timeout, DNS failure, etc.).
     case transport(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .http(let status, let body):
+            let detail = body.flatMap { $0.prefix(200).description } ?? "no body"
+            return "HTTP \(status): \(detail)"
+        case .decoding(let detail):
+            return "Response decoding failed: \(detail)"
+        case .missingCredentials(let detail):
+            return "Missing credentials: \(detail)"
+        case .refreshFailure(let reason):
+            return "Token refresh failed: \(reason.rawValue)"
+        case .transport(let detail):
+            return "Network error: \(detail)"
+        }
+    }
 }
 
 /// Mirrors the upstream `RefreshTokenFailedReason` enum from

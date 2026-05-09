@@ -52,6 +52,7 @@ public final class BackendClient: Sendable {
             (data, response) = try await session.data(for: request)
         } catch {
             logger.error("Transport error for \(url, privacy: .public): \(String(describing: error), privacy: .public)")
+            flog("BackendClient", "Transport error: \(url) \(error)")
             throw BackendError.transport(String(describing: error))
         }
 
@@ -61,6 +62,7 @@ public final class BackendClient: Sendable {
         guard (200..<300).contains(http.statusCode) else {
             let body = String(data: data, encoding: .utf8)
             logger.warning("HTTP \(http.statusCode) from \(url, privacy: .public)")
+            flog("BackendClient", "HTTP \(http.statusCode) from \(url)")
             throw BackendError.http(status: http.statusCode, body: body)
         }
 
