@@ -10,6 +10,7 @@ struct CodexSwitcherApp: App {
 
     init() {
         logger.info("CodexSwitcherApp initializing")
+        flog("App", "CodexSwitcherApp initializing")
         Migration.runIfNeeded()
         let monitor = UsageMonitor()
         monitor.environment = AppEnvironment.shared
@@ -23,6 +24,7 @@ struct CodexSwitcherApp: App {
         // small: just a directory scan + a JSON decode per profile.
         monitor.reloadProfiles()
         logger.info("CodexSwitcherApp init: primed profiles count=\(monitor.profiles.count, privacy: .public)")
+        flog("App", "Primed profiles count=\(monitor.profiles.count) activeID=\(monitor.activeID ?? "nil")")
         _monitor = State(initialValue: monitor)
     }
 

@@ -42,6 +42,14 @@ final class UsageMonitor {
             config.save()
         }
     }
+    var verboseLogging: Bool {
+        get { config.verboseLogging }
+        set {
+            config.verboseLogging = newValue
+            config.save()
+            flog("Monitor", "Verbose logging \(newValue ? "enabled" : "disabled")")
+        }
+    }
     var needsRestart: Bool = false
     /// `true` once a poll has confirmed there are no imported Codex profiles.
     /// Drives the popover's first-run empty state — the "Unable to fetch usage
@@ -97,6 +105,7 @@ final class UsageMonitor {
 
     func manualPoll() async {
         logger.info("Manual poll triggered")
+        flog("Monitor", "Manual poll triggered")
         await poll()
     }
 
@@ -123,20 +132,42 @@ final class UsageMonitor {
         let env = environment ?? AppEnvironment.shared
         let loaded = env.profileStore.loadAll()
         profiles = loaded
-        activeID = env.slotStore.loadActiveID()
+
+        // Reconcile: if the live auth.json belongs to a different profile than
+        // what the slot store says, update the slot. This is the source of truth
+        // — the user may have run `codex login` externally for a different
+        // account, and the app must reflect that on next poll / popover open.
+        var slotID = env.slotStore.loadActiveID()
+        if let liveURL = env.resolver.canonicalReadPath(),
+           let liveAuth = try? Snapshotter.read(liveURL),
+           let liveDedupKey = try? Snapshotter.dedupKey(for: liveAuth) {
+            let currentProfile = loaded.first { $0.id == slotID }
+            if currentProfile == nil || currentProfile?.dedupKey != liveDedupKey,
+               let match = loaded.first(where: { $0.dedupKey == liveDedupKey }) {
+                try? env.slotStore.setActiveID(match.id)
+                slotID = match.id
+                logger.info("Reconciled active slot: \(match.label, privacy: .public) (live auth.json dedup key changed)")
+                flog("Monitor", "Reconciled active slot: \(match.label) (live auth.json dedup key changed)")
+            }
+        }
+
+        activeID = slotID
         _ProfileListReloadObserver.didReload?(loaded)
     }
 
     func startPolling() async {
         logger.info("startPolling: pollInterval=\(self.config.pollIntervalSeconds, privacy: .public)s")
+        flog("Monitor", "startPolling: pollInterval=\(config.pollIntervalSeconds)s")
         napActivity = ProcessInfo.processInfo.beginActivity(options: .background, reason: "Periodic API polling")
 
         ensureOptimiser()
 
         logger.info("Starting initial poll")
+        flog("Monitor", "Starting initial poll")
         await poll()
 
         logger.info("Entering polling loop: interval=\(self.config.pollIntervalSeconds, privacy: .public)s")
+        flog("Monitor", "Entering polling loop: interval=\(config.pollIntervalSeconds)s")
         defer {
             if let activity = napActivity {
                 ProcessInfo.processInfo.endActivity(activity)
@@ -192,6 +223,7 @@ final class UsageMonitor {
         lastUpdated = Date()
 
         logger.info("Poll complete: calibrator=\(result.calibrator, privacy: .public) target=\(result.target, privacy: .public) optimalRate=\(result.optimalRate, privacy: .public)")
+        flog("Monitor", "Poll processed: session=\(sessionUsagePct)% weekly=\(weeklyUsagePct)% calibrator=\(result.calibrator) target=\(result.target)")
     }
 
     private func ensureOptimiser() {
@@ -224,8 +256,9 @@ final class UsageMonitor {
         reloadProfiles()
         guard let (profile, perProfile) = env.activeProfileAndActor() else {
             noProfileImported = true
-            appendError("No Codex profile imported. Click Import credentials, or run `codex login` first.")
+            appendError("No Codex profile imported. Click Import credentials. If no live credentials are found, sign in with Codex first.")
             logger.warning("No active profile — skipping poll")
+            flog("Monitor", "No active profile — skipping poll")
             return
         }
         noProfileImported = false
@@ -246,6 +279,7 @@ final class UsageMonitor {
                 isSessionActive: primary != nil && sessionMinsLeft > 0
             )
             logger.info("Codex poll ok: profile=\(profile.label, privacy: .public) primary%=\(primary?.usedPercent ?? -1, privacy: .public) secondary%=\(secondary?.usedPercent ?? -1, privacy: .public)")
+            flog("Monitor", "Poll ok: profile=\(profile.label) primary%=\(primary?.usedPercent ?? -1) secondary%=\(secondary?.usedPercent ?? -1)")
             // Persist the active profile's usage percentages so the profile
             // row shows real numbers instead of "—". The Warmer already does
             // this for inactive profiles; the active profile's data flows
@@ -255,6 +289,8 @@ final class UsageMonitor {
             var updated = profile
             updated.primaryUsedPercent = primary?.usedPercent
             updated.secondaryUsedPercent = secondary?.usedPercent
+            updated.planType = response.planType ?? updated.planType
+            updated.warning = nil
             do {
                 try env.profileStore.updateMetadata(updated)
             } catch {
@@ -269,11 +305,35 @@ final class UsageMonitor {
                 sessionMinsLeft: sessionMinsLeft
             )
         } catch let BackendError.refreshFailure(reason) {
-            appendError("Refresh failed for \(profile.label): \(reason.rawValue). Re-run `codex login` for that account.")
+            appendError("Refresh failed for \(profile.label): \(reason.rawValue). Click Import credentials to re-import current Codex credentials; if none are available, sign in with Codex first.")
             logger.error("Refresh failure: profile=\(profile.id, privacy: .public) reason=\(reason.rawValue, privacy: .public)")
+            flog("Monitor", "Refresh failure: profile=\(profile.label) reason=\(reason.rawValue)")
+            var updated = profile
+            updated.warning = ProfileWarning(refreshFailure: reason)
+            try? env.profileStore.updateMetadata(updated)
+            reloadProfiles()
+        } catch let BackendError.http(status, _) where status == 401 {
+            appendError("Backend rejected credentials for \(profile.label). Click Import credentials to re-import current Codex credentials; if none are available, sign in with Codex first.")
+            logger.error("HTTP 401 after refresh retry: profile=\(profile.id, privacy: .public)")
+            flog("Monitor", "HTTP 401 after refresh retry: profile=\(profile.label)")
+            var updated = profile
+            updated.warning = .accountMismatch
+            try? env.profileStore.updateMetadata(updated)
+            reloadProfiles()
+        } catch let identityError as ProfileSnapshotIdentityError {
+            appendError("Stored credentials for \(profile.label) belong to another account. Click Import credentials to replace the stale profile with the current Codex account.")
+            logger.error("Profile snapshot identity mismatch: profile=\(identityError.profileID, privacy: .public) expected=\(identityError.expectedDedupKey, privacy: .private(mask: .hash)) actual=\(identityError.actualDedupKey, privacy: .private(mask: .hash))")
+            flog("Monitor", "Profile snapshot identity mismatch: profile=\(profile.label)")
+            var updated = profile
+            updated.warning = .accountMismatch
+            updated.primaryUsedPercent = nil
+            updated.secondaryUsedPercent = nil
+            try? env.profileStore.updateMetadata(updated)
+            reloadProfiles()
         } catch {
             appendError(error.localizedDescription)
-            logger.error("Poll failed: \(error.localizedDescription, privacy: .public)")
+            logger.error("Poll failed: \(String(describing: error), privacy: .public)")
+            flog("Monitor", "Poll failed: profile=\(profile.label) error=\(error)")
         }
     }
 
@@ -290,6 +350,7 @@ final class UsageMonitor {
         }
         guard let due else { return }
         logger.info("Warming profile=\(due.label, privacy: .public)")
+        flog("Monitor", "Warming profile=\(due.label)")
         let actor = env.perProfile(for: due)
         let svc = warmer ?? Warmer(store: env.profileStore)
         if warmer == nil { warmer = svc }
@@ -302,7 +363,10 @@ final class UsageMonitor {
         primaryUsedPercent: Double?,
         sessionMinsLeft: Double
     ) async {
-        guard config.autoSwitchEnabled else { return }
+        guard config.autoSwitchEnabled else {
+            flog("Monitor", "Auto-switch: disabled, skipping")
+            return
+        }
         guard let primary = primaryUsedPercent else { return }
         guard primary >= config.autoSwitchThresholdPercent else {
             // Reset gate once we drop below threshold so the next breach can fire.
@@ -321,6 +385,7 @@ final class UsageMonitor {
             excluding: activeProfile.id
         ) else {
             logger.warning("Auto-switch aborted: no fresh low-usage candidate (active=\(activeProfile.label, privacy: .public) primary%=\(primary, privacy: .public))")
+            flog("Monitor", "Auto-switch aborted: no fresh candidate (active=\(activeProfile.label) primary%=\(primary))")
             await notifier.post(
                 title: "Codex usage at \(Int(primary))%",
                 body: "No fresh low-usage profile is available. Run a manual refresh to warm candidates, or switch manually."
@@ -338,6 +403,7 @@ final class UsageMonitor {
             )
             needsRestart = true
             logger.info("Auto-switched profile=\(activeProfile.label, privacy: .public) → \(winner.label, privacy: .public)")
+            flog("Monitor", "Auto-switched: \(activeProfile.label) → \(winner.label)")
             await notifier.post(
                 title: "Switched profile",
                 body: "\(activeProfile.label) → \(winner.label). Restart Codex for the new account to take effect."
@@ -345,6 +411,7 @@ final class UsageMonitor {
             await poll()
         } catch {
             logger.error("Auto-switch failed: \(String(describing: error), privacy: .public)")
+            flog("Monitor", "Auto-switch failed: \(error)")
             appendError("Auto-switch failed: \(error.localizedDescription)")
         }
     }
