@@ -41,8 +41,11 @@ struct SwitcherTests {
 
     private static func makeAuth(user: String, account: String, refreshToken: String, lastRefresh: Date? = nil) throws -> AuthJSON {
         let token = try idToken(user: user, account: account)
+        // Access token must be a valid JWT with future exp so
+        // refreshIfNeeded() (called during switchTo) is a no-op.
+        let accessToken = try idToken(user: user, account: account, exp: Date().addingTimeInterval(3600))
         return AuthJSON(
-            tokens: AuthTokens(idToken: token, accessToken: "ax-\(refreshToken)", refreshToken: refreshToken, accountID: account),
+            tokens: AuthTokens(idToken: token, accessToken: accessToken, refreshToken: refreshToken, accountID: account),
             lastRefresh: lastRefresh
         )
     }

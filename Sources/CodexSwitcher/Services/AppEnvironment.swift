@@ -49,6 +49,7 @@ public final class AppEnvironment: @unchecked Sendable {
             let actor = PerProfile(
                 profileID: profile.id,
                 snapshotURL: snapshotURL,
+                expectedDedupKey: profile.dedupKey,
                 backend: backend,
                 refresher: refresher
             )

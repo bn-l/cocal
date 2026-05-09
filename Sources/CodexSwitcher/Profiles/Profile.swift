@@ -66,15 +66,15 @@ public enum ProfileWarning: String, Codable, Sendable, Equatable, CaseIterable {
     public var humanDescription: String {
         switch self {
         case .refreshExpired:
-            return "Refresh token expired. Run `codex login` for this account and re-import."
+            return "Refresh token expired. Click Import credentials to re-import current Codex credentials; if none are available, sign in with Codex first."
         case .refreshExhausted:
-            return "Refresh token was reused (single-use rotation violated). Run `codex login` again."
+            return "Refresh token was reused (single-use rotation violated). Click Import credentials to re-import current Codex credentials; if none are available, sign in with Codex first."
         case .refreshRevoked:
-            return "Credentials were revoked — likely you logged out elsewhere. Run `codex login` again."
+            return "Credentials were revoked. Click Import credentials to re-import current Codex credentials; if none are available, sign in with Codex first."
         case .snapshotUnreadable:
             return "Stored credentials are unreadable. Re-import this profile."
         case .accountMismatch:
-            return "Stored credentials no longer match the imported account. Re-import."
+            return "Stored credentials no longer match this profile. Click Import credentials to re-import current Codex credentials."
         case .unknown:
             return "Unknown error. Try a manual refresh; if it persists, re-import."
         }

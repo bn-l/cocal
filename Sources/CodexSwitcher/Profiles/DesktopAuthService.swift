@@ -25,6 +25,7 @@ public struct DesktopAuthService: Sendable {
         }
         try Snapshotter.write(auth, to: target)
         logger.info("Installed auth.json at=\(target.path, privacy: .public)")
+        flog("DesktopAuth", "Installed auth.json at=\(target.path)")
         return target
     }
 }

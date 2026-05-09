@@ -14,16 +14,25 @@ struct ProfileWarningTests {
         }
     }
 
-    @Test("refreshExpired prompt mentions `codex login`")
+    @Test("refreshExpired prompt prioritizes re-import before sign-in fallback")
     func refreshExpiredCopy() {
-        #expect(ProfileWarning.refreshExpired.humanDescription.lowercased().contains("codex login"))
+        let s = ProfileWarning.refreshExpired.humanDescription.lowercased()
+        #expect(s.contains("re-import"))
+        #expect(s.contains("sign in"))
     }
 
-    @Test("refreshExhausted prompt mentions single-use rotation context")
+    @Test("refreshExhausted prompt mentions single-use rotation context and re-import")
     func refreshExhaustedCopy() {
         let s = ProfileWarning.refreshExhausted.humanDescription.lowercased()
-        // Must point the user at the recovery action.
-        #expect(s.contains("codex login"))
+        #expect(s.contains("single-use"))
+        #expect(s.contains("re-import"))
+    }
+
+    @Test("accountMismatch prompt tells the user to re-import current credentials")
+    func accountMismatchCopy() {
+        let s = ProfileWarning.accountMismatch.humanDescription.lowercased()
+        #expect(s.contains("import credentials"))
+        #expect(!s.contains("codex login"))
     }
 
     @Test("RefreshFailureReason → ProfileWarning mapping is exhaustive")

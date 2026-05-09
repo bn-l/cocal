@@ -3,6 +3,16 @@ import OSLog
 
 private let logger = Logger(subsystem: "com.bn-l.codex-switcher", category: "PerProfile")
 
+public struct ProfileSnapshotIdentityError: Error, Equatable, LocalizedError, Sendable {
+    public let profileID: String
+    public let expectedDedupKey: String
+    public let actualDedupKey: String
+
+    public var errorDescription: String? {
+        "Stored credentials do not belong to this imported profile."
+    }
+}
+
 /// The single ownership boundary for any read-modify-write on a profile snapshot
 /// (PLAN.md §2.3 "Per-profile write serialization"). Concurrent calls on the same
 /// `PerProfile` actor serialize automatically; cross-profile flows acquire actors
@@ -17,6 +27,7 @@ public actor PerProfile {
 
     /// Where the on-disk `auth.json` snapshot lives. Owned exclusively by this actor.
     public let snapshotURL: URL
+    private let expectedDedupKey: String?
 
     private let backend: BackendClient
     private let refresher: TokenRefresher
@@ -37,12 +48,14 @@ public actor PerProfile {
     public init(
         profileID: String,
         snapshotURL: URL,
+        expectedDedupKey: String? = nil,
         backend: BackendClient = BackendClient(),
         refresher: TokenRefresher = TokenRefresher(),
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.profileID = profileID
         self.snapshotURL = snapshotURL
+        self.expectedDedupKey = expectedDedupKey
         self.backend = backend
         self.refresher = refresher
         self.now = now
@@ -51,14 +64,29 @@ public actor PerProfile {
     // MARK: - Snapshot I/O
 
     public func readSnapshot() throws -> AuthJSON {
-        try Snapshotter.read(snapshotURL)
+        let auth = try Snapshotter.read(snapshotURL)
+        try validateSnapshotIdentity(auth)
+        return auth
     }
 
     public func writeSnapshot(_ auth: AuthJSON) throws {
+        try validateSnapshotIdentity(auth)
         try Snapshotter.write(auth, to: snapshotURL)
         // Any cached HTTPS data was tied to the prior tokens — drop it.
         cachedUsage = nil
         cachedAccount = nil
+    }
+
+    private func validateSnapshotIdentity(_ auth: AuthJSON) throws {
+        guard let expectedDedupKey else { return }
+        let actualDedupKey = try Snapshotter.dedupKey(for: auth)
+        guard actualDedupKey == expectedDedupKey else {
+            throw ProfileSnapshotIdentityError(
+                profileID: profileID,
+                expectedDedupKey: expectedDedupKey,
+                actualDedupKey: actualDedupKey
+            )
+        }
     }
 
     /// Replace the snapshot with the contents currently sitting at the live Codex
@@ -96,14 +124,26 @@ public actor PerProfile {
     /// persist the rotated tokens immediately. Returns the (possibly new) snapshot.
     @discardableResult
     public func refreshIfNeeded() async throws -> AuthJSON {
-        var auth = try readSnapshot()
+        let auth = try readSnapshot()
         guard let tokens = auth.tokens else { throw Snapshotter.Error.missingTokens }
         let claims = (try? JWT.decode(tokens.accessToken)) ?? JWT.Claims(
             exp: nil, email: nil, chatgptUserID: nil, chatgptAccountID: nil, chatgptPlanType: nil
         )
         guard JWT.isExpired(claims, now: now()) else { return auth }
 
+        return try await refresh(auth: auth, tokens: tokens)
+    }
+
+    private func forceRefresh() async throws -> AuthJSON {
+        let auth = try readSnapshot()
+        guard let tokens = auth.tokens else { throw Snapshotter.Error.missingTokens }
+        return try await refresh(auth: auth, tokens: tokens)
+    }
+
+    private func refresh(auth original: AuthJSON, tokens: AuthTokens) async throws -> AuthJSON {
+        var auth = original
         logger.info("Refreshing token for profile=\(self.profileID, privacy: .public)")
+        flog("PerProfile", "Refreshing token for profile=\(profileID)")
         let response = try await refresher.refresh(refreshToken: tokens.refreshToken)
         auth.tokens = AuthTokens(
             idToken: response.idToken ?? tokens.idToken,
@@ -118,6 +158,10 @@ public actor PerProfile {
 
     // MARK: - HTTPS coalescing
 
+    nonisolated private func accountID(for tokens: AuthTokens) -> String {
+        tokens.accountID ?? (try? JWT.decode(tokens.idToken).chatgptAccountID) ?? ""
+    }
+
     /// Single-flight + 15s-TTL wrapper around `BackendClient.usage`.
     public func usage() async throws -> UsageResponse {
         if let cached = cachedUsage, now().timeIntervalSince(cached.at) < Self.cacheTTL {
@@ -129,8 +173,18 @@ public actor PerProfile {
         let task = Task<UsageResponse, Swift.Error> { [backend] in
             let auth = try await self.refreshIfNeeded()
             guard let tokens = auth.tokens else { throw Snapshotter.Error.missingTokens }
-            let accountID = tokens.accountID ?? (try? JWT.decode(tokens.idToken).chatgptAccountID) ?? ""
-            return try await backend.usage(accessToken: tokens.accessToken, accountID: accountID)
+            do {
+                return try await backend.usage(accessToken: tokens.accessToken, accountID: self.accountID(for: tokens))
+            } catch let BackendError.http(status, _) where status == 401 {
+                logger.warning("Usage endpoint rejected access token for profile=\(self.profileID, privacy: .public); forcing one refresh and retry")
+                flog("PerProfile", "Usage 401 for profile=\(self.profileID); forcing refresh and retry")
+                let refreshed = try await self.forceRefresh()
+                guard let refreshedTokens = refreshed.tokens else { throw Snapshotter.Error.missingTokens }
+                return try await backend.usage(
+                    accessToken: refreshedTokens.accessToken,
+                    accountID: self.accountID(for: refreshedTokens)
+                )
+            }
         }
         inflightUsage = task
         defer { inflightUsage = nil }
@@ -150,8 +204,18 @@ public actor PerProfile {
         let task = Task<AccountsCheckResponse, Swift.Error> { [backend] in
             let auth = try await self.refreshIfNeeded()
             guard let tokens = auth.tokens else { throw Snapshotter.Error.missingTokens }
-            let accountID = tokens.accountID ?? (try? JWT.decode(tokens.idToken).chatgptAccountID) ?? ""
-            return try await backend.accountsCheck(accessToken: tokens.accessToken, accountID: accountID)
+            do {
+                return try await backend.accountsCheck(accessToken: tokens.accessToken, accountID: self.accountID(for: tokens))
+            } catch let BackendError.http(status, _) where status == 401 {
+                logger.warning("Accounts endpoint rejected access token for profile=\(self.profileID, privacy: .public); forcing one refresh and retry")
+                flog("PerProfile", "Accounts 401 for profile=\(self.profileID); forcing refresh and retry")
+                let refreshed = try await self.forceRefresh()
+                guard let refreshedTokens = refreshed.tokens else { throw Snapshotter.Error.missingTokens }
+                return try await backend.accountsCheck(
+                    accessToken: refreshedTokens.accessToken,
+                    accountID: self.accountID(for: refreshedTokens)
+                )
+            }
         }
         inflightAccount = task
         defer { inflightAccount = nil }

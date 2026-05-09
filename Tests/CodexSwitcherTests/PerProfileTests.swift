@@ -298,6 +298,58 @@ struct PerProfileTests {
         }
     }
 
+    @Test("usage() refreshes and retries once when the usage endpoint rejects a fresh access token")
+    func usageRefreshesAndRetriesAfterUsage401() async throws {
+        let snapURL = try Self.tempSnapshot(Date().addingTimeInterval(3600))
+        defer { try? FileManager.default.removeItem(at: snapURL.deletingLastPathComponent()) }
+
+        let session = MockURLProtocol.makeSession()
+        let refreshCount = AtomicCounter()
+        let usageCount = AtomicCounter()
+        MockURLProtocol.acquireGate(); defer { MockURLProtocol.releaseGate() }
+        let refreshedToken = try Self.idToken(exp: Date().addingTimeInterval(7200))
+        MockURLProtocol.setHandler { request in
+            if request.url == BackendConstants.tokenRefreshURL {
+                refreshCount.increment()
+                return try MockURLProtocol.jsonResponse(url: request.url!, json: [
+                    "access_token": refreshedToken,
+                    "refresh_token": "ROTATED-AFTER-401",
+                    "id_token": refreshedToken,
+                    "token_type": "Bearer",
+                    "expires_in": 3600,
+                    "scope": "openid",
+                ])
+            }
+
+            #expect(request.url == BackendConstants.usageURL)
+            usageCount.increment()
+            if usageCount.value == 1 {
+                return MockURLProtocol.textResponse(
+                    url: request.url!,
+                    status: 401,
+                    body: #"{"detail":"stale access token"}"#
+                )
+            }
+            return try MockURLProtocol.jsonResponse(url: request.url!, json: [
+                "primary": ["used_percent": 0.0],
+            ])
+        }
+
+        let actor = PerProfile(
+            profileID: "p", snapshotURL: snapURL,
+            backend: BackendClient(session: session),
+            refresher: TokenRefresher(session: session)
+        )
+
+        let response = try await actor.usage()
+
+        #expect(response.resolvedWindows.primary?.usedPercent == 0.0)
+        #expect(usageCount.value == 2)
+        #expect(refreshCount.value == 1)
+        let onDisk = try Snapshotter.read(snapURL)
+        #expect(onDisk.tokens?.refreshToken == "ROTATED-AFTER-401")
+    }
+
     @Test("Single-flight: while a refresh-driven usage() is in flight, a second usage() reuses it (one rotation only)")
     func usageCoalescesAroundRefresh() async throws {
         let snapURL = try Self.tempSnapshot(Date().addingTimeInterval(-3600))

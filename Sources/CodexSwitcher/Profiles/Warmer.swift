@@ -38,11 +38,21 @@ public actor Warmer: WarmingService {
             updated.warning = nil
         } catch let BackendError.refreshFailure(reason) {
             logger.warning("Refresh failed for profile=\(profile.id, privacy: .public): \(reason.rawValue, privacy: .public)")
+            flog("Warmer", "Refresh failed: profile=\(profile.label) reason=\(reason.rawValue)")
             updated.warning = ProfileWarning(refreshFailure: reason)
+            do { try store.updateMetadata(updated) } catch { logger.error("Metadata write failed: \(error.localizedDescription, privacy: .public)") }
+            return updated
+        } catch let identityError as ProfileSnapshotIdentityError {
+            logger.warning("Snapshot identity mismatch for profile=\(identityError.profileID, privacy: .public)")
+            flog("Warmer", "Snapshot identity mismatch: profile=\(profile.label)")
+            updated.warning = .accountMismatch
+            updated.primaryUsedPercent = nil
+            updated.secondaryUsedPercent = nil
             do { try store.updateMetadata(updated) } catch { logger.error("Metadata write failed: \(error.localizedDescription, privacy: .public)") }
             return updated
         } catch {
             logger.warning("Refresh transport error profile=\(profile.id, privacy: .public): \(String(describing: error), privacy: .public)")
+            flog("Warmer", "Refresh transport error: profile=\(profile.label) error=\(error)")
             updated.warning = .unknown
             do { try store.updateMetadata(updated) } catch { logger.error("Metadata write failed: \(error.localizedDescription, privacy: .public)") }
             return updated

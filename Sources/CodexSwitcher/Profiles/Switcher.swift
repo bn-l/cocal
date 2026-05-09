@@ -59,11 +59,18 @@ public actor Switcher {
                     try await outgoingActor.captureLive(from: liveURL)
                 } catch {
                     logger.warning("Outgoing capture-live failed (continuing): \(String(describing: error), privacy: .public)")
+                    flog("Switcher", "Outgoing capture-live failed (continuing): \(error)")
                 }
             }
         }
 
-        // Step 2 — write the incoming profile's snapshot to the canonical path.
+        // Step 2a — refresh the incoming profile's tokens so we don't install
+        // stale credentials that would brick Codex on next launch. If the refresh
+        // fails (revoked, expired, exhausted), the error propagates and the swap
+        // aborts — the live auth.json and slot store remain untouched.
+        try await incomingActor.refreshIfNeeded()
+
+        // Step 2b — write the incoming profile's snapshot to the canonical path.
         // The per-profile actor owns the snapshot file; we read it under the actor's
         // queue and pass the in-memory bundle to `desktopAuth` for the canonical write.
         let bundle = try await incomingActor.readSnapshot()
@@ -72,6 +79,7 @@ public actor Switcher {
         // Step 3 — slot pointer.
         try slotStore.setActiveID(incomingProfile.id)
         logger.info("Activated profile=\(incomingProfile.id, privacy: .public) at=\(target.path, privacy: .public)")
+        flog("Switcher", "Activated profile=\(incomingProfile.id) at=\(target.path)")
         return target
     }
 }

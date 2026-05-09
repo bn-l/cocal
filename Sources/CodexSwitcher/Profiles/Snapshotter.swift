@@ -3,12 +3,27 @@ import Foundation
 /// Pure read/write helpers for `auth.json` files — no profile state, no locking.
 /// All concurrency control happens at the `PerProfile` actor layer one level up.
 public enum Snapshotter {
-    public enum Error: Swift.Error, Equatable {
+    public enum Error: Swift.Error, Equatable, LocalizedError {
         case fileNotFound(URL)
         case unreadable(URL, String)
         case malformedJSON(String)
         case missingTokens
         case writeFailure(String)
+
+        public var errorDescription: String? {
+            switch self {
+            case .fileNotFound(let url):
+                return "Snapshot not found at \(url.path)"
+            case .unreadable(let url, let detail):
+                return "Snapshot unreadable at \(url.path): \(detail)"
+            case .malformedJSON(let detail):
+                return "Malformed snapshot JSON: \(detail)"
+            case .missingTokens:
+                return "Snapshot has no tokens object"
+            case .writeFailure(let detail):
+                return "Snapshot write failed: \(detail)"
+            }
+        }
     }
 
     /// Read and decode an `auth.json` from disk.

@@ -87,6 +87,7 @@ public struct Importer: Sendable {
         )
         try store.insert(profile, snapshot: auth)
         logger.info("Imported new profile=\(profile.id, privacy: .public) dedup=\(dedupKey, privacy: .private(mask: .hash))")
+        flog("Importer", "Imported new profile=\(profile.id) label=\(resolvedLabel)")
         return (.imported(profile), auth)
     }
 }
